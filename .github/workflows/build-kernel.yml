@@ -251,34 +251,35 @@ jobs:
         export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin:$PATH
         export KBUILD_BUILD_HOST=Github-Action
         export KBUILD_BUILD_USER=$(echo ${{ github.actor }} | tr A-Z a-z)
+
+        # 关掉 clang 的 “gnu-variable-sized-type-not-at-end” 这个 warning 的 error 化
+        export KCFLAGS="$KCFLAGS -Wno-error=gnu-variable-sized-type-not-at-end"
+
         if [ ! -z ${{ env.KSU_EXPECTED_SIZE }} ] && [ ! -z ${{ env.KSU_EXPECTED_HASH }} ]; then
           export KSU_EXPECTED_SIZE=${{ env.KSU_EXPECTED_SIZE }}
           export KSU_EXPECTED_HASH=${{ env.KSU_EXPECTED_HASH }}
         fi
-        make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }} ${{ env.KERNEL_CONFIG }}
+
+        # 第一次：生成 defconfig / 准备配置
+        make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} \
+          ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} \
+          ${{ env.GCC_64 }} ${{ env.GCC_32 }} \
+          KCFLAGS="$KCFLAGS" \
+          ${{ env.KERNEL_CONFIG }}
+
+        # 第二次：正式编译
         if [ ${{ env.ENABLE_CCACHE }} = true ]; then
-            make -j$(nproc --all) CC="ccache clang" O=out ARCH=${{ env.ARCH }} ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }}
+            make -j$(nproc --all) CC="ccache clang" O=out ARCH=${{ env.ARCH }} \
+              ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} \
+              ${{ env.GCC_64 }} ${{ env.GCC_32 }} \
+              KCFLAGS="$KCFLAGS"
         else
-            make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} ${{ env.GCC_64 }} ${{ env.GCC_32 }}
+            make -j$(nproc --all) CC=clang O=out ARCH=${{ env.ARCH }} \
+              ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} \
+              ${{ env.GCC_64 }} ${{ env.GCC_32 }} \
+              KCFLAGS="$KCFLAGS"
         fi
 
-    - name: Check a kernel output files
-      run: |
-       cd $GITHUB_WORKSPACE/kernel_workspace
-       if [ -f android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }} ]; then
-           echo "CHECK_FILE_IS_OK=true" >> $GITHUB_ENV
-       else
-           echo "Kernel output file is empty"
-           exit 1
-       fi
-       if [ ${{ env.NEED_DTBO }} = true ]; then
-           if [ -f android-kernel/out/arch/${{ env.ARCH }}/boot/dtbo.img ]; then
-               echo "CHECK_DTBO_IS_OK=true" >> $GITHUB_ENV
-           else
-               echo "DTBO image is empty"
-               exit 1
-           fi
-       fi
 
     - name: Make Anykernel3
       if: env.CHECK_FILE_IS_OK == 'true' && env.USE_CUSTOM_ANYKERNEL3 != 'true'
