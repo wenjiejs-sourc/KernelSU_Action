@@ -263,12 +263,13 @@ jobs:
     - name: Build kernel
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        # 关闭若干常见 warning 的 error 化，避免 clang 把它们当成致命错误
         export KCFLAGS="$KCFLAGS -Wno-error=format -Wno-error=gnu-variable-sized-type-not-at-end -Wno-error=unused-but-set-variable"
-
         export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin:$PATH
         export KBUILD_BUILD_HOST=Github-Action
         export KBUILD_BUILD_USER=$(echo ${{ github.actor }} | tr A-Z a-z)
+
+        # 关掉这个特定 warning 的 error 化
+        export KCFLAGS="$KCFLAGS -Wno-error=gnu-variable-sized-type-not-at-end"
 
         if [ ! -z ${{ env.KSU_EXPECTED_SIZE }} ] && [ ! -z ${{ env.KSU_EXPECTED_HASH }} ]; then
           export KSU_EXPECTED_SIZE=${{ env.KSU_EXPECTED_SIZE }}
