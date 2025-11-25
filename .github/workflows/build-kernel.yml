@@ -238,9 +238,20 @@ jobs:
             echo "CONFIG_CC_WERROR=n" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
         fi
 
-        # 🔧 修复 Mediatek touch 驱动里的格式化错误
+        # 🔧 修复 Mediatek touch 驱动里的格式化错误（你原来的）
         sed -i 's/gcore_headset_nodifier_callback start event = %d/gcore_headset_nodifier_callback start event = %lu/' \
           drivers/input/touchscreen/mediatek/GC7202H/gcore_drv_fw_update.c
+
+        # 🔧 1) gcore_drv_mp_test.c: max_speed_hz 是 u32，用 %u 避免 [-Werror,-Wformat]
+        sed -i 's/scnprintf(speed, sizeof(speed), "%lu", g_mp_data->gdev->bus_device->max_speed_hz);/scnprintf(speed, sizeof(speed), "%u", g_mp_data->gdev->bus_device->max_speed_hz);/' \
+          drivers/input/touchscreen/mediatek/GC7202H/gcore_drv_mp_test.c
+
+        # 🔧 2) ilitek_v3_mp.c: banchmark_flag / nodetype_flag 仅被赋值未使用 → (void) 吃掉 unused-but-set-variable
+        sed -i '/banchmark_flag/a\\t(void)banchmark_flag;\\t(void)nodetype_flag;\' drivers/input/touchscreen/mediatek/ILI9882Q/ilitek_v3_mp.c
+
+        # 🔧 3) ilitek_v3_hostdl.c: ges_area_section 仅被赋值未使用 → (void) 吃掉 unused-but-set-variable
+        sed -i '/ges_area_section/a\\t(void)ges_area_section;\' drivers/input/touchscreen/mediatek/ILI9882Q/ilitek_v3_hostdl.c
+
 
     - name: Setup ccache
       if: env.ENABLE_CCACHE == 'true'
@@ -252,13 +263,12 @@ jobs:
     - name: Build kernel
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        export KCFLAGS="$KCFLAGS -Wno-error=format -Wno-error=gnu-variable-sized-type-not-at-end"
+        # 关闭若干常见 warning 的 error 化，避免 clang 把它们当成致命错误
+        export KCFLAGS="$KCFLAGS -Wno-error=format -Wno-error=gnu-variable-sized-type-not-at-end -Wno-error=unused-but-set-variable"
+
         export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin:$PATH
         export KBUILD_BUILD_HOST=Github-Action
         export KBUILD_BUILD_USER=$(echo ${{ github.actor }} | tr A-Z a-z)
-
-        # 关掉这个特定 warning 的 error 化
-        export KCFLAGS="$KCFLAGS -Wno-error=gnu-variable-sized-type-not-at-end"
 
         if [ ! -z ${{ env.KSU_EXPECTED_SIZE }} ] && [ ! -z ${{ env.KSU_EXPECTED_HASH }} ]; then
           export KSU_EXPECTED_SIZE=${{ env.KSU_EXPECTED_SIZE }}
@@ -284,7 +294,6 @@ jobs:
               ${{ env.GCC_64 }} ${{ env.GCC_32 }} \
               KCFLAGS="$KCFLAGS"
         fi
-
 
 
     - name: Make Anykernel3
