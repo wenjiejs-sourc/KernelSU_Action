@@ -238,6 +238,10 @@ jobs:
             echo "CONFIG_CC_WERROR=n" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
         fi
 
+        # 🔧 修复 Mediatek touch 驱动里的格式化错误
+        sed -i 's/gcore_headset_nodifier_callback start event = %d/gcore_headset_nodifier_callback start event = %lu/' \
+          drivers/input/touchscreen/mediatek/GC7202H/gcore_drv_fw_update.c
+
     - name: Setup ccache
       if: env.ENABLE_CCACHE == 'true'
       uses: hendrikmuhs/ccache-action@v1.2
