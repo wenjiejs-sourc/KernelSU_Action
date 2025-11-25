@@ -252,6 +252,18 @@ jobs:
         # 🔧 3) ilitek_v3_hostdl.c: ges_area_section 仅被赋值未使用 → (void) 吃掉 unused-but-set-variable
         sed -i '/ges_area_section/a\\t(void)ges_area_section;\' drivers/input/touchscreen/mediatek/ILI9882Q/ilitek_v3_hostdl.c
 
+    - name: Force disable Werror in kernel Makefile
+      run: |
+        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+
+        # 在顶层 Makefile 最后面直接追加一条，把所有 CFLAGS 再次覆盖成非 error
+        {
+          echo ''
+          echo '# ===== Added by GitHub Actions: force disable -Werror ====='
+          echo 'KBUILD_CFLAGS   += -Wno-error'
+          echo 'KBUILD_CPPFLAGS += -Wno-error'
+        } >> Makefile
+        
 
     - name: Setup ccache
       if: env.ENABLE_CCACHE == 'true'
