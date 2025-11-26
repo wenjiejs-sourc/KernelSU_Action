@@ -245,6 +245,10 @@ jobs:
         sed -i 's/scnprintf(speed, sizeof(speed), "%lu", g_mp_data->gdev->bus_device->max_speed_hz);/scnprintf(speed, sizeof(speed), "%u", g_mp_data->gdev->bus_device->max_speed_hz);/' \
           drivers/input/touchscreen/mediatek/GC7202H/gcore_drv_mp_test.c
 
+        # 🔧 修复 input_booster.c 的 old-style function 定义
+        sed -i 's/int is_ib_init_succeed() {/int is_ib_init_succeed(void) {/' \
+          drivers/input/input_booster.c
+
 
     
     - name: Force disable Werror in kernel Makefile
