@@ -275,7 +275,7 @@ jobs:
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
 
-        # 统一在这里关掉各种 Werror
+        # 统一关掉各种 Werror
         export KCFLAGS="$KCFLAGS \
           -Wno-error=format \
           -Wno-error=gnu-variable-sized-type-not-at-end \
@@ -288,6 +288,48 @@ jobs:
         export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin:$PATH
         export KBUILD_BUILD_HOST=Github-Action
         export KBUILD_BUILD_USER=$(echo ${{ github.actor }} | tr A-Z a-z)
+
+        # 如果你填了 KSU_EXPECTED_* 就导出
+        if [ -n "${{ env.KSU_EXPECTED_SIZE }}" ] && [ -n "${{ env.KSU_EXPECTED_HASH }}" ]; then
+          export KSU_EXPECTED_SIZE=${{ env.KSU_EXPECTED_SIZE }}
+          export KSU_EXPECTED_HASH=${{ env.KSU_EXPECTED_HASH }}
+        fi
+
+        echo ">>> 使用 defconfig 生成 .config"
+        make O=out ARCH=${{ env.ARCH }} \
+          ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} \
+          ${{ env.GCC_64 }} ${{ env.GCC_32 }} \
+          ${{ env.KERNEL_CONFIG }}
+
+        echo ">>> 正式编译内核"
+        if [ "${{ env.ENABLE_CCACHE }}" = "true" ]; then
+          make -j"$(nproc --all)" O=out ARCH=${{ env.ARCH }} \
+            CC="ccache clang" \
+            ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} \
+            ${{ env.GCC_64 }} ${{ env.GCC_32 }} \
+            KCFLAGS="$KCFLAGS"
+        else
+          make -j"$(nproc --all)" O=out ARCH=${{ env.ARCH }} \
+            CC=clang \
+            ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} \
+            ${{ env.GCC_64 }} ${{ env.GCC_32 }} \
+            KCFLAGS="$KCFLAGS"
+        fi
+
+        # 检查 Image.gz 是否编译成功
+        IMG_PATH="out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}"
+        if [ -f "$IMG_PATH" ]; then
+          echo "找到内核镜像: $IMG_PATH"
+          echo "CHECK_FILE_IS_OK=true" >> $GITHUB_ENV
+        else
+          echo "没有找到 $IMG_PATH，编译失败"
+          exit 1
+        fi
+
+        # 如果需要 dtbo 就顺便标记一下
+        if [ "${{ env.NEED_DTBO }}" = "true" ] && [ -f "out/arch/${{ env.ARCH }}/boot/dtbo.img" ]; then
+          echo "CHECK_DTBO_IS_OK=true" >> $GITHUB_ENV
+        fi
 
 
 
