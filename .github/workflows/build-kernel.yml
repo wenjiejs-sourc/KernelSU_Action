@@ -249,9 +249,10 @@ jobs:
         sed -i 's/int is_ib_init_succeed() {/int is_ib_init_succeed(void) {/' \
           drivers/input/input_booster.c
 
-         # 修复 cam_cal eeprom_i2c_common_driver 的错误条件
-        sed -i 's/if ((checkflag & 0x04) != 1)/if ((checkflag & 0x04) == 0)/g' \
+        # 修复 cam_cal eeprom_i2c_common_driver 的错误条件
+        sed -i 's/if ((checkflag & 0x04) != 1)/if ((checkflag \& 0x04) == 0)/g' \
           drivers/misc/mediatek/cam_cal/src/common/v1/eeprom_i2c_common_driver.c
+
 
     
     - name: Force disable Werror in kernel Makefile
