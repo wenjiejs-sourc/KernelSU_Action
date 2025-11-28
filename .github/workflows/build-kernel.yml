@@ -228,47 +228,44 @@ jobs:
                 echo "CONFIG_KSU=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
             fi
         fi
-
         if [ ${{ env.ADD_KPROBES_CONFIG }} = true -a ${{ env.APPLY_KSU_PATCH }} != true ]; then
             echo "CONFIG_MODULES=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
             echo "CONFIG_KPROBES=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
             echo "CONFIG_HAVE_KPROBES=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
             echo "CONFIG_KPROBE_EVENTS=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
         fi
-
         if [ ${{ env.ADD_OVERLAYFS_CONFIG }} = true ]; then
             echo "CONFIG_OVERLAY_FS=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
         fi
-
         if [ ${{ env.DISABLE-LTO }} = true ]; then
             sed -i 's/CONFIG_LTO=y/CONFIG_LTO=n/' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
             sed -i 's/CONFIG_LTO_CLANG=y/CONFIG_LTO_CLANG=n/' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
             sed -i 's/CONFIG_THINLTO=y/CONFIG_THINLTO=n/' arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
             echo "CONFIG_LTO_NONE=y" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
         fi
-
         if [ ${{ env.DISABLE_CC_WERROR }} = true ]; then
             echo "CONFIG_CC_WERROR=n" >> arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}
         fi
 
-        # ---- 安全的格式 warning 修复 ----
+        # 只保留这两个安全的格式修复
         sed -i 's/gcore_headset_nodifier_callback start event = %d/gcore_headset_nodifier_callback start event = %lu/' \
           drivers/input/touchscreen/mediatek/GC7202H/gcore_drv_fw_update.c
 
         sed -i 's/scnprintf(speed, sizeof(speed), "%lu", g_mp_data->gdev->bus_device->max_speed_hz);/scnprintf(speed, sizeof(speed), "%u", g_mp_data->gdev->bus_device->max_speed_hz);/' \
           drivers/input/touchscreen/mediatek/GC7202H/gcore_drv_mp_test.c
 
-        # 修复 input_booster.c 的 old-style function 定义
+        # 🔧 修复 input_booster.c 的 old-style function 定义
         sed -i 's/int is_ib_init_succeed() {/int is_ib_init_succeed(void) {/' \
           drivers/input/input_booster.c
 
-        # 修复 cam_cal eeprom_i2c_common_driver 条件表达式
-        sed -i 's/(checkflag & 0x04) != 1/(checkflag & 0x04) == 0/g' \
+        # ✅ 修 cam_cal eeprom_i2c_common_driver 之前被弄坏的 if 条件
+        sed -i 's/if ((checkflag (checkflag & 0x04) != 1 0x04) == 0)/if ((checkflag & 0x04) == 0)/g' \
           drivers/misc/mediatek/cam_cal/src/common/v1/eeprom_i2c_common_driver.c
 
-        # 修复 mtk_wcn_cmb_hw.c 未使用变量 pTimeSlot：追加 (void)pTimeSlot;
-        sed -i '/PUINT32 pTimeSlot = (PUINT32) &gPwrSeqTime;/a \        (void)pTimeSlot;' \
+        # ✅ 修 mtk_wcn_cmb_hw.c 未使用变量 pTimeSlot（只加 (void) 不重复声明）
+        sed -i 's/PUINT32 pTimeSlot = (PUINT32) &gPwrSeqTime;/PUINT32 pTimeSlot = (PUINT32) &gPwrSeqTime; (void)pTimeSlot;/' \
           drivers/misc/mediatek/connectivity/common/common_main/platform/mtk_wcn_cmb_hw.c
+
 
     - name: Force disable Werror in kernel Makefile
       run: |
