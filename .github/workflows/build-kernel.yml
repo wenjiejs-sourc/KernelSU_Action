@@ -294,11 +294,11 @@ jobs:
           -Wno-error=format \
           -Wno-error=gnu-variable-sized-type-not-at-end \
           -Wno-error=unused-but-set-variable \
+          -Wno-error=unused-variable \
           -Wno-error=initializer-overrides \
           -Wno-error=strict-prototypes \
           -Wno-error=uninitialized \
-          -Wno-error=sometimes-uninitialized \
-          -Wno-error=tautological-bitwise-compare"
+          -Wno-error=sometimes-uninitialized"
 
         export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin:$PATH
         export KBUILD_BUILD_HOST=Github-Action
