@@ -262,9 +262,10 @@ jobs:
         sed -i 's/if ((checkflag (checkflag & 0x04) != 1 0x04) == 0)/if ((checkflag & 0x04) == 0)/g' \
           drivers/misc/mediatek/cam_cal/src/common/v1/eeprom_i2c_common_driver.c
 
-        # ✅ 修 mtk_wcn_cmb_hw.c 未使用变量 pTimeSlot（只加 (void) 不重复声明）
-        sed -i 's/PUINT32 pTimeSlot = (PUINT32) &gPwrSeqTime;/PUINT32 pTimeSlot = (PUINT32) &gPwrSeqTime; (void)pTimeSlot;/' \
+                # 修复 mtk_wcn_cmb_hw.c 未使用变量 pTimeSlot：在其后面加一行 (void)pTimeSlot;
+        sed -i '/PUINT32 pTimeSlot = (PUINT32) &gPwrSeqTime;/a\ \t(void)pTimeSlot;' \
           drivers/misc/mediatek/connectivity/common/common_main/platform/mtk_wcn_cmb_hw.c
+
 
 
     - name: Force disable Werror in kernel Makefile
