@@ -274,8 +274,12 @@ jobs:
         sed -i 's/int is_ib_init_succeed() {/int is_ib_init_succeed(void) {/' \
           drivers/input/input_booster.c
 
-        # 修复 cam_cal eeprom 比较条件 (避免 tautological-bitwise-compare)
-        sed -i 's/(checkflag & 0x04) != 1/(checkflag & 0x04) == 0/g' \
+        # 修复原始写法：if ((checkflag & 0x04) != 1)
+        sed -i 's#if ((checkflag & 0x04) != 1)#if ((checkflag \& 0x04) == 0)#' \
+          drivers/misc/mediatek/cam_cal/src/common/v1/eeprom_i2c_common_driver.c
+        
+        # 万一之前已经被错误 sed 搞成奇怪样子，也一起修回去：
+        sed -i 's#if ((checkflag (checkflag & 0x04) != 1 0x04) == 0)#if ((checkflag \& 0x04) == 0)#' \
           drivers/misc/mediatek/cam_cal/src/common/v1/eeprom_i2c_common_driver.c
 
         # 修复 mtk_wcn_cmb_hw.c 未使用变量（加 (void) 吃掉 warning）
