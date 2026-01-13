@@ -108,7 +108,7 @@ jobs:
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         DEFCONFIG="arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}"
         
-        # 自动开启 SukiSU 及相关内核选项
+        # 1. 自动开启 SukiSU 及相关内核选项
         echo "CONFIG_KSU=y" >> $DEFCONFIG
         echo "CONFIG_KSU_SUKI_ULTRA=y" >> $DEFCONFIG
         
@@ -123,11 +123,21 @@ jobs:
             echo "CONFIG_OVERLAY_FS=y" >> $DEFCONFIG
         fi
 
-        # 🔧 修复三星 MTK 源码编译报错
+        # 2. 🔧 修复三星 MTK 源码特定的语法错误
         sed -i 's/int is_ib_init_succeed() {/int is_ib_init_succeed(void) {/' drivers/input/input_booster.c
         sed -i 's/if ((checkflag (checkflag \& 0x04) != 1 0x04) == 0)/if ((checkflag \& 0x04) == 0)/g' \
           drivers/misc/mediatek/cam_cal/src/common/v1/eeprom_i2c_common_driver.c
 
+        # 3. 🛡️ [暴力清理] 移除内核所有目录下可能存在的 -Werror 标志
+        # 这一步能彻底解决“将警告视为错误”导致的编译中断
+        find . -type f \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) -exec sed -i 's/-Werror//g' {} +
+
+        # 4. 🧹 针对性修复你提到的 ILITEK 和 Chipone 驱动
+        # 即使全局清理漏了，这里也会双重保险
+        sed -i 's/-Werror//g' drivers/input/touchscreen/mediatek/ILI9882Q/Makefile || true
+        sed -i 's/-Werror//g' drivers/input/touchscreen/mediatek/chipone-tddi/Makefile || true
+
+        
     - name: Force disable Werror
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
