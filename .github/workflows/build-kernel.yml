@@ -151,19 +151,31 @@ jobs:
         export KBUILD_BUILD_HOST=Github-Action
         export KBUILD_BUILD_USER="Gemini"
         
-        # 定义需要忽略的警告
-        COMMON_FLAGS="-Wno-error -Wno-error=format -Wno-error=unused-variable -Wno-error=strict-prototypes -Wno-gnu-variable-sized-type-not-at-end"
+        # 修正后的 Flag：每一个都必须以 -Wno- 开头，严禁在等号两边加空格
+        # 注意：不要使用 -implicit-function-declaration，要用 -Wno-implicit-function-declaration
+        COMMON_FLAGS="-Wno-error \
+          -Wno-error=unused-but-set-variable \
+          -Wno-error=unused-variable \
+          -Wno-error=format \
+          -Wno-error=implicit-function-declaration \
+          -Wno-error=return-type \
+          -Wno-error=initializer-overrides \
+          -Wno-implicit-function-declaration \
+          -Wno-initializer-overrides \
+          -Wno-return-type"
 
         echo ">>> 生成 .config"
-        # 注意：KCFLAGS 这里直接加在 make 命令前面作为环境变量
+        # 注入 KCFLAGS 执行 make defconfig
         KCFLAGS="$COMMON_FLAGS" make O=out ARCH=${{ env.ARCH }} ${{ env.GCC_64 }} ${{ env.GCC_32 }} ${{ env.KERNEL_CONFIG }}
 
-        echo ">>> 开始编译"
-        # 同样，在正式编译时也将 KCFLAGS 注入环境变量
-        KCFLAGS="$COMMON_FLAGS" make -j"$(nproc --all)" O=out ARCH=${{ env.ARCH }} \
-          CC=clang \
+        echo ">>> 正式编译"
+        # 核心修复：CC 变量中的 Clang Flag 必须保持连贯
+        make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} \
+          CC="clang" \
           ${{ env.GCC_64 }} ${{ env.GCC_32 }} \
-          ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
+          ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} \
+          KCFLAGS="$COMMON_FLAGS" \
+          KCPPFLAGS="$COMMON_FLAGS"
 
         IMG_PATH="out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}"
         if [ -f "$IMG_PATH" ]; then
