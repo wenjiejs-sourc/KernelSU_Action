@@ -16,7 +16,6 @@ jobs:
 
     - name: Prepare Configuration
       run: |
-        # 优化变量读取：排除注释和空行，统一格式后写入环境
         if [ -f "config.env" ]; then
           sed -i 's/ *= */=/g' config.env
           grep -v '^#' config.env | grep '=' >> $GITHUB_ENV
@@ -35,7 +34,6 @@ jobs:
         haskell: true
         large-packages: true
         docker-images: true
-        swap-storage: false
 
     - name: Set swap to 10G
       uses: pierotofy/set-swap-space@master
@@ -55,13 +53,10 @@ jobs:
           policycoreutils minicom libxml-sax-base-perl libxml-simple-perl bc \
           libc6-dev-i386 lib32ncurses5-dev libx11-dev lib32z-dev \
           libgl1-mesa-dev xsltproc unzip device-tree-compiler python2 python3
-        
-        # 解决部分脚本对 python 命令的依赖
         sudo ln -sf /usr/bin/python2 /usr/bin/python
         mkdir -p $GITHUB_WORKSPACE/kernel_workspace
 
     - name: Download Clang-aosp
-      if: env.USE_CUSTOM_CLANG != 'true'
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
         mkdir clang-aosp
@@ -84,12 +79,6 @@ jobs:
             echo "GCC_32=CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/kernel_workspace/gcc-32/bin/arm-linux-androideabi-" >> $GITHUB_ENV
         fi
 
-    - name: Download mkbootimg tools
-      if: env.BUILD_BOOT_IMG == 'true'
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        git clone https://android.googlesource.com/platform/system/tools/mkbootimg tools -b master-kernel-build-2022 --depth=1
-
     - name: Download kernel source
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace
@@ -99,50 +88,28 @@ jobs:
       if: env.ENABLE_KERNELSU == 'true'
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        # 使用 SukiSU-Ultra 官方集成脚本
         curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
-        echo "UPLOADNAME=-SukiSU-Ultra" >> $GITHUB_ENV
 
     - name: Setup Configuration for Kernel
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         DEFCONFIG="arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}"
         
-        # 1. 自动开启 SukiSU 及相关内核选项
+        # 1. 自动开启选项
         echo "CONFIG_KSU=y" >> $DEFCONFIG
         echo "CONFIG_KSU_SUKI_ULTRA=y" >> $DEFCONFIG
-        
-        if [ "${{ env.ADD_KPROBES_CONFIG }}" = "true" ]; then
-            echo "CONFIG_MODULES=y" >> $DEFCONFIG
-            echo "CONFIG_KPROBES=y" >> $DEFCONFIG
-            echo "CONFIG_HAVE_KPROBES=y" >> $DEFCONFIG
-            echo "CONFIG_KPROBE_EVENTS=y" >> $DEFCONFIG
-        fi
-        
-        if [ "${{ env.ADD_OVERLAYFS_CONFIG }}" = "true" ]; then
-            echo "CONFIG_OVERLAY_FS=y" >> $DEFCONFIG
-        fi
+        echo "CONFIG_MODULES=y" >> $DEFCONFIG
+        echo "CONFIG_KPROBES=y" >> $DEFCONFIG
+        echo "CONFIG_OVERLAY_FS=y" >> $DEFCONFIG
 
-        # 2. 🔧 修复三星 MTK 源码特定的语法错误
+        # 2. 🛡️ 物理移除所有带等号的警告配置 (终极补丁)
+        find . -type f \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) -exec sed -i 's/-Werror//g' {} +
+        find . -type f \( -name "Makefile" -o -name "Kbuild" \) -exec sed -i 's/-Wno-error=[^ ]*//g' {} +
+
+        # 3. 🔧 修复三星特定语法
         sed -i 's/int is_ib_init_succeed() {/int is_ib_init_succeed(void) {/' drivers/input/input_booster.c
         sed -i 's/if ((checkflag (checkflag \& 0x04) != 1 0x04) == 0)/if ((checkflag \& 0x04) == 0)/g' \
           drivers/misc/mediatek/cam_cal/src/common/v1/eeprom_i2c_common_driver.c
-
-        # 3. 🛡️ [暴力清理] 移除内核所有目录下可能存在的 -Werror 标志
-        # 这一步能彻底解决“将警告视为错误”导致的编译中断
-        find . -type f \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) -exec sed -i 's/-Werror//g' {} +
-
-        # 4. 🧹 针对性修复你提到的 ILITEK 和 Chipone 驱动
-        # 即使全局清理漏了，这里也会双重保险
-        sed -i 's/-Werror//g' drivers/input/touchscreen/mediatek/ILI9882Q/Makefile || true
-        sed -i 's/-Werror//g' drivers/input/touchscreen/mediatek/chipone-tddi/Makefile || true
-
-        
-    - name: Force disable Werror
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        echo 'KBUILD_CFLAGS += -Wno-error' >> Makefile
-        echo 'KBUILD_CPPFLAGS += -Wno-error' >> Makefile
 
     - name: Build kernel
       run: |
@@ -151,33 +118,23 @@ jobs:
         export KBUILD_BUILD_HOST=Github-Action
         export KBUILD_BUILD_USER="Gemini"
 
-        # 【核心修复】
-        # 1. 彻底去掉包含 "=" 的参数，防止 Shell 错误拆分
-        # 2. 直接使用 -Wno-xxx 关闭警告，而不是降级为错误
-        # 3. 加入 -w 参数，暴力关闭所有非必要警告
-        export IGNORE_ERRORS="-w -Wno-error -Wno-implicit-function-declaration -Wno-implicit-int -Wno-return-type -Wno-unused-variable -Wno-unused-but-set-variable -Wno-initializer-overrides -Wno-format"
-
-        # 将 Flag 注入到环境变量，比写在命令行更安全
-        export KCFLAGS="$IGNORE_ERRORS"
-        export KCPPFLAGS="$IGNORE_ERRORS"
+        # 使用无等号标志，并强制注入
+        export IGNORE_ARGS="-w -Wno-error -Wno-implicit-function-declaration -Wno-return-type -Wno-unused-variable -Wno-unused-but-set-variable -Wno-initializer-overrides"
+        export KCFLAGS="$IGNORE_ARGS"
+        export KCPPFLAGS="$IGNORE_ARGS"
 
         echo ">>> 生成 .config"
         make O=out ARCH=${{ env.ARCH }} ${{ env.GCC_64 }} ${{ env.GCC_32 }} ${{ env.KERNEL_CONFIG }}
 
         echo ">>> 正式编译"
-        # 注意：这里 CC="clang" 后面不要再加 Flag 了，全靠上面的环境变量
         make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} \
           CC="clang" \
           ${{ env.GCC_64 }} ${{ env.GCC_32 }} \
           ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
 
-        # 检查编译结果
-        IMG_PATH="out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}"
-        if [ -f "$IMG_PATH" ]; then
+        if [ -f "out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}" ]; then
           echo "CHECK_FILE_IS_OK=true" >> $GITHUB_ENV
-          echo "✅ 内核编译成功: $IMG_PATH"
         else
-          echo "❌ 编译失败，未找到镜像文件"
           exit 1
         fi
 
@@ -191,7 +148,7 @@ jobs:
         cp android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }} AnyKernel3/
         cd AnyKernel3 && zip -r ../SukiSU-Ultra-A04.zip *
 
-    - name: Upload SukiSU-Ultra
+    - name: Upload Artifact
       if: env.CHECK_FILE_IS_OK == 'true'
       uses: actions/upload-artifact@v4
       with:
