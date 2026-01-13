@@ -141,18 +141,19 @@ jobs:
         export KBUILD_BUILD_HOST=Github-Action
         export KBUILD_BUILD_USER="Gemini"
         
-        # 统一忽略警告错误
-        export KCFLAGS="-Wno-error -Wno-error=format -Wno-error=unused-variable -Wno-error=strict-prototypes"
+        # 定义需要忽略的警告
+        COMMON_FLAGS="-Wno-error -Wno-error=format -Wno-error=unused-variable -Wno-error=strict-prototypes -Wno-gnu-variable-sized-type-not-at-end"
 
         echo ">>> 生成 .config"
-        make O=out ARCH=${{ env.ARCH }} ${{ env.GCC_64 }} ${{ env.GCC_32 }} ${{ env.KERNEL_CONFIG }}
+        # 注意：KCFLAGS 这里直接加在 make 命令前面作为环境变量
+        KCFLAGS="$COMMON_FLAGS" make O=out ARCH=${{ env.ARCH }} ${{ env.GCC_64 }} ${{ env.GCC_32 }} ${{ env.KERNEL_CONFIG }}
 
         echo ">>> 开始编译"
-        make -j"$(nproc --all)" O=out ARCH=${{ env.ARCH }} \
+        # 同样，在正式编译时也将 KCFLAGS 注入环境变量
+        KCFLAGS="$COMMON_FLAGS" make -j"$(nproc --all)" O=out ARCH=${{ env.ARCH }} \
           CC=clang \
           ${{ env.GCC_64 }} ${{ env.GCC_32 }} \
-          ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} \
-          KCFLAGS="$KCFLAGS"
+          ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
 
         IMG_PATH="out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}"
         if [ -f "$IMG_PATH" ]; then
