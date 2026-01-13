@@ -151,37 +151,25 @@ jobs:
         export KBUILD_BUILD_HOST=Github-Action
         export KBUILD_BUILD_USER="Gemini"
         
-        # 修正后的 Flag：每一个都必须以 -Wno- 开头，严禁在等号两边加空格
-        # 注意：不要使用 -implicit-function-declaration，要用 -Wno-implicit-function-declaration
-        COMMON_FLAGS="-Wno-error \
-          -Wno-error=unused-but-set-variable \
-          -Wno-error=unused-variable \
-          -Wno-error=format \
-          -Wno-error=implicit-function-declaration \
-          -Wno-error=return-type \
-          -Wno-error=initializer-overrides \
-          -Wno-implicit-function-declaration \
-          -Wno-initializer-overrides \
-          -Wno-return-type"
+        # 将参数合并为一个紧凑的字符串，去掉多余的换行和空格
+        FLAGS="-Wno-error -Wno-error=unused-but-set-variable -Wno-error=unused-variable -Wno-error=format -Wno-error=implicit-function-declaration -Wno-error=return-type -Wno-error=initializer-overrides -Wno-implicit-function-declaration -Wno-initializer-overrides -Wno-return-type"
 
         echo ">>> 生成 .config"
-        # 注入 KCFLAGS 执行 make defconfig
-        KCFLAGS="$COMMON_FLAGS" make O=out ARCH=${{ env.ARCH }} ${{ env.GCC_64 }} ${{ env.GCC_32 }} ${{ env.KERNEL_CONFIG }}
+        make O=out ARCH=${{ env.ARCH }} ${{ env.GCC_64 }} ${{ env.GCC_32 }} ${{ env.KERNEL_CONFIG }}
 
         echo ">>> 正式编译"
-        # 核心修复：CC 变量中的 Clang Flag 必须保持连贯
+        # 修复关键：在 make 参数里直接定义 KCFLAGS，并用单引号包裹整个变量
         make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} \
           CC="clang" \
           ${{ env.GCC_64 }} ${{ env.GCC_32 }} \
           ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} \
-          KCFLAGS="$COMMON_FLAGS" \
-          KCPPFLAGS="$COMMON_FLAGS"
+          KCFLAGS="$FLAGS" \
+          KCPPFLAGS="$FLAGS"
 
-        IMG_PATH="out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}"
-        if [ -f "$IMG_PATH" ]; then
+        if [ -f "out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}" ]; then
           echo "CHECK_FILE_IS_OK=true" >> $GITHUB_ENV
         else
-          echo "编译失败，未找到镜像文件"
+          echo "Kernel image not found!"
           exit 1
         fi
 
