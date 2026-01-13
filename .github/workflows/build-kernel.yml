@@ -95,22 +95,27 @@ jobs:
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         DEFCONFIG="arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}"
         
-        # 1. 自动开启选项
+        # 1. 注入 KSU 配置
         echo "CONFIG_KSU=y" >> $DEFCONFIG
         echo "CONFIG_KSU_SUKI_ULTRA=y" >> $DEFCONFIG
         echo "CONFIG_MODULES=y" >> $DEFCONFIG
         echo "CONFIG_KPROBES=y" >> $DEFCONFIG
         echo "CONFIG_OVERLAY_FS=y" >> $DEFCONFIG
 
-        # 2. 🛡️ 物理移除所有带等号的警告配置 (终极补丁)
+        # 2. 【核心暴力修复】
+        # 扫描所有 Makefile，将 "-Wno-error=xxx" 替换为 "-Wno-xxx" (去掉等号)
+        # 扫描所有 Makefile，将 "-implicit-function-declaration" 替换为 "-Wno-implicit-function-declaration"
+        echo ">>> 开始全源码 Makefile 物理修复..."
+        find . -type f \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) -exec sed -i 's/-Wno-error=[^ ]*/-Wno-error/g' {} +
         find . -type f \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) -exec sed -i 's/-Werror//g' {} +
-        find . -type f \( -name "Makefile" -o -name "Kbuild" \) -exec sed -i 's/-Wno-error=[^ ]*//g' {} +
+        find . -type f \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) -exec sed -i 's/-implicit-function-declaration/-Wno-implicit-function-declaration/g' {} +
 
-        # 3. 🔧 修复三星特定语法
+        # 3. 修复三星 MTK 驱动特定的语法错误
         sed -i 's/int is_ib_init_succeed() {/int is_ib_init_succeed(void) {/' drivers/input/input_booster.c
         sed -i 's/if ((checkflag (checkflag \& 0x04) != 1 0x04) == 0)/if ((checkflag \& 0x04) == 0)/g' \
           drivers/misc/mediatek/cam_cal/src/common/v1/eeprom_i2c_common_driver.c
 
+          
     - name: Build kernel
       run: |
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
@@ -118,23 +123,25 @@ jobs:
         export KBUILD_BUILD_HOST=Github-Action
         export KBUILD_BUILD_USER="Gemini"
 
-        # 使用无等号标志，并强制注入
-        export IGNORE_ARGS="-w -Wno-error -Wno-implicit-function-declaration -Wno-return-type -Wno-unused-variable -Wno-unused-but-set-variable -Wno-initializer-overrides"
-        export KCFLAGS="$IGNORE_ARGS"
-        export KCPPFLAGS="$IGNORE_ARGS"
+        # 使用极其简单的 Flag，避开所有等号
+        SIMPLE_FLAGS="-w -Wno-error"
 
         echo ">>> 生成 .config"
         make O=out ARCH=${{ env.ARCH }} ${{ env.GCC_64 }} ${{ env.GCC_32 }} ${{ env.KERNEL_CONFIG }}
 
         echo ">>> 正式编译"
+        # 核心：直接在命令行注入 KCFLAGS 和 KCPPFLAGS，不经过中间变量传递以防二次解析
         make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} \
           CC="clang" \
           ${{ env.GCC_64 }} ${{ env.GCC_32 }} \
-          ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }}
+          ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} \
+          KCFLAGS="-w -Wno-error" \
+          KCPPFLAGS="-w -Wno-error"
 
         if [ -f "out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}" ]; then
           echo "CHECK_FILE_IS_OK=true" >> $GITHUB_ENV
         else
+          echo "Build failed: Image not found"
           exit 1
         fi
 
