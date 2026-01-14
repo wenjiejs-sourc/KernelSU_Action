@@ -90,56 +90,66 @@ jobs:
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
 
       - name: Setup Configuration for Kernel
-        run: |
-          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-          DEFCONFIG="arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}"
-          
-          # 1. 注入配置
-          echo "CONFIG_KSU=y" >> $DEFCONFIG
-          echo "CONFIG_KSU_SUKI_ULTRA=y" >> $DEFCONFIG
-          echo "CONFIG_MODULES=y" >> $DEFCONFIG
-          echo "CONFIG_KPROBES=y" >> $DEFCONFIG
-          echo "CONFIG_OVERLAY_FS=y" >> $DEFCONFIG
-          
-          # 2. 暴力解决 4.19 内核不认识 MODULE_IMPORT_NS 的问题
-          # 直接删除包含这个宏的整行，因为 4.19 不需要它
+      run: |
+        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+        DEFCONFIG="arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}"
+        
+        # 1. 注入 KSU 与内核配置
+        echo "CONFIG_KSU=y" >> $DEFCONFIG
+        echo "CONFIG_KSU_SUKI_ULTRA=y" >> $DEFCONFIG
+        echo "CONFIG_MODULES=y" >> $DEFCONFIG
+        echo "CONFIG_KPROBES=y" >> $DEFCONFIG
+        echo "CONFIG_OVERLAY_FS=y" >> $DEFCONFIG
+        
+        # 2. 【核心暴力修复】在全源码范围内彻底抹除带等号的警告参数
+        # 这一步必须在 make 之前执行，确保 scripts/ 目录下的 Makefile 也被清洗
+        echo ">>> 开始全源码 Makefile 物理清洗..."
+        find . -type f \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) -exec sed -i \
+          -e 's/-Wno-error=[^ ]*/-Wno-error/g' \
+          -e 's/-Werror=[^ ]*/-Wno-error/g' \
+          -e 's/-Werror//g' \
+          -e 's/-implicit-function-declaration/-Wno-implicit-function-declaration/g' {} +
+
+        # 3. 修复 4.19 内核不认识的 KSU 宏 (MODULE_IMPORT_NS)
+        if [ -f "drivers/kernelsu/ksu.c" ]; then
           sed -i '/MODULE_IMPORT_NS/d' drivers/kernelsu/ksu.c
+        fi
 
-          # 3. 物理层面移除 = 号参数和 Werror
-          find . -type f \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) | xargs sed -i \
-            -e 's/-Wno-error=[^ ]*/-Wno-error/g' \
-            -e 's/-Werror//g' \
-            -e 's/-implicit-function-declaration/-Wno-implicit-function-declaration/g'
-          
-          # 4. 原有特定文件语法修复
-          sed -i 's/int is_ib_init_succeed() {/int is_ib_init_succeed(void) {/' drivers/input/input_booster.c
-          sed -i 's/if ((checkflag (checkflag \& 0x04) != 1 0x04) == 0)/if ((checkflag \& 0x04) == 0)/g' \
-            drivers/misc/mediatek/cam_cal/src/common/v1/eeprom_i2c_common_driver.c
+        # 4. 修复三星 MTK 驱动特定的语法错误
+        [ -f "drivers/input/input_booster.c" ] && sed -i 's/int is_ib_init_succeed() {/int is_ib_init_succeed(void) {/' drivers/input/input_booster.c
+        [ -f "drivers/misc/mediatek/cam_cal/src/common/v1/eeprom_i2c_common_driver.c" ] && sed -i 's/if ((checkflag (checkflag \& 0x04) != 1 0x04) == 0)/if ((checkflag \& 0x04) == 0)/g' \
+          drivers/misc/mediatek/cam_cal/src/common/v1/eeprom_i2c_common_driver.c
 
-      - name: Build kernel
-        run: |
-          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-          export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin:$PATH
-          export KBUILD_BUILD_HOST=Github-Action
-          export KBUILD_BUILD_USER="Gemini"
-          
-          echo ">>> 生成 .config"
-          make O=out ARCH=${{ env.ARCH }} ${{ env.GCC_64 }} ${{ env.GCC_32 }} ${{ env.KERNEL_CONFIG }}
-          
-          echo ">>> 正式编译"
-          make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} \
-            CC="clang" \
-            ${{ env.GCC_64 }} ${{ env.GCC_32 }} \
-            ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} \
-            KCFLAGS="-w -Wno-error" \
-            KCPPFLAGS="-w -Wno-error" \
-            WERROR=0
-          
-          if [ -f "out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}" ]; then
-            echo "CHECK_FILE_IS_OK=true" >> $GITHUB_ENV
-          else
-            exit 1
-          fi
+    - name: Build kernel
+      run: |
+        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+        export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin:$PATH
+        
+        # 注入环境变量，强制覆盖所有阶段的 CFLAGS
+        # 使用最简单的 Flag，严禁出现等号
+        export KCFLAGS="-w -Wno-error"
+        export KCPPFLAGS="-w -Wno-error"
+        export KBUILD_BUILD_HOST=Github-Action
+        export KBUILD_BUILD_USER="Gemini"
+
+        echo ">>> 生成 .config"
+        make O=out ARCH=${{ env.ARCH }} ${{ env.GCC_64 }} ${{ env.GCC_32 }} ${{ env.KERNEL_CONFIG }}
+
+        echo ">>> 正式编译"
+        # 在命令行再次显式注入 KCFLAGS/KCPPFLAGS
+        make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} \
+          CC="clang" \
+          ${{ env.GCC_64 }} ${{ env.GCC_32 }} \
+          ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} \
+          KCFLAGS="-w -Wno-error" \
+          KCPPFLAGS="-w -Wno-error" \
+          WERROR=0
+
+        if [ -f "out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}" ]; then
+          echo "CHECK_FILE_IS_OK=true" >> $GITHUB_ENV
+        else
+          exit 1
+        fi
 
       - name: Make Anykernel3
         if: env.CHECK_FILE_IS_OK == 'true'
