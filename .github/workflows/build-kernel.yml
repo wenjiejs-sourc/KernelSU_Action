@@ -10,151 +10,162 @@ jobs:
       CCACHE_NOHASHDIR: "true"
       CCACHE_HARDLINK: "true"
     steps:
-    - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-    - name: Prepare Configuration
-      run: |
-        if [ -f "config.env" ]; then
-          sed -i 's/ *= */=/g' config.env
-          grep -v '^#' config.env | grep '=' >> $GITHUB_ENV
-        else
-          echo "Error: config.env not found!"
-          exit 1
-        fi
+      - name: Prepare Configuration
+        run: |
+          if [ -f "config.env" ]; then
+            sed -i 's/ *= */=/g' config.env
+            grep -v '^#' config.env | grep '=' >> $GITHUB_ENV
+          else
+            echo "Error: config.env not found!"
+            exit 1
+          fi
 
-    - name: Remove unused packages
-      if: env.REMOVE_UNUSED_PACKAGES == 'true'
-      uses: jlumbroso/free-disk-space@main
-      with:
-        tool-cache: true
-        android: false
-        dotnet: true
-        haskell: true
-        large-packages: true
-        docker-images: true
+      - name: Remove unused packages
+        if: env.REMOVE_UNUSED_PACKAGES == 'true'
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: false
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
 
-    - name: Set swap to 10G
-      uses: pierotofy/set-swap-space@master
-      with:
-        swap-size-gb: 10
+      - name: Set swap to 10G
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 10
 
-    - name: Setup build kernel environment
-      run: |
-        echo "BUILD_TIME=$(TZ=Asia/Shanghai date "+%Y%m%d%H%M")" >> $GITHUB_ENV
-        echo "DEVICE=$(echo ${{ env.KERNEL_CONFIG }} | sed 's!vendor/!!;s/_defconfig//;s/_user//;s/-perf//')" >> $GITHUB_ENV
-        sudo apt-get update
-        sudo apt-get install -y \
-          git ccache automake flex lzop bison gperf build-essential zip curl \
-          zlib1g-dev g++-multilib libxml2-utils bzip2 libbz2-dev libbz2-1.0 \
-          libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev \
-          liblz4-tool make optipng maven libssl-dev pwgen libswitch-perl \
-          policycoreutils minicom libxml-sax-base-perl libxml-simple-perl bc \
-          libc6-dev-i386 lib32ncurses5-dev libx11-dev lib32z-dev \
-          libgl1-mesa-dev xsltproc unzip device-tree-compiler python2 python3
-        sudo ln -sf /usr/bin/python2 /usr/bin/python
-        mkdir -p $GITHUB_WORKSPACE/kernel_workspace
+      - name: Setup build kernel environment
+        run: |
+          echo "BUILD_TIME=$(TZ=Asia/Shanghai date "+%Y%m%d%H%M")" >> $GITHUB_ENV
+          echo "DEVICE=$(echo ${{ env.KERNEL_CONFIG }} | sed 's!vendor/!!;s/_defconfig//;s/_user//;s/-perf//')" >> $GITHUB_ENV
+          sudo apt-get update
+          sudo apt-get install -y \
+            git ccache automake flex lzop bison gperf build-essential zip curl \
+            zlib1g-dev g++-multilib libxml2-utils bzip2 libbz2-dev libbz2-1.0 \
+            libghc-bzlib-dev squashfs-tools pngcrush schedtool dpkg-dev \
+            liblz4-tool make optipng maven libssl-dev pwgen libswitch-perl \
+            policycoreutils minicom libxml-sax-base-perl libxml-simple-perl bc \
+            libc6-dev-i386 lib32ncurses5-dev libx11-dev lib32z-dev \
+            libgl1-mesa-dev xsltproc unzip device-tree-compiler python2 python3
+          sudo ln -sf /usr/bin/python2 /usr/bin/python
+          mkdir -p $GITHUB_WORKSPACE/kernel_workspace
 
-    - name: Download Clang-aosp
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        mkdir clang-aosp
-        wget -q "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/${{ env.CLANG_BRANCH }}/clang-${{ env.CLANG_VERSION }}.tar.gz"
-        tar -C clang-aosp/ -zxvf "clang-${{ env.CLANG_VERSION }}.tar.gz"
+      - name: Download Clang-aosp
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace
+          mkdir clang-aosp
+          wget -q "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/${{ env.CLANG_BRANCH }}/clang-${{ env.CLANG_VERSION }}.tar.gz"
+          tar -C clang-aosp/ -zxvf "clang-${{ env.CLANG_VERSION }}.tar.gz"
 
-    - name: Download Gcc-aosp
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        if [ "${{ env.ENABLE_GCC_ARM64 }}" = "true" ]; then
-            mkdir gcc-64
-            wget -q -O gcc-aarch64.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz
-            tar -C gcc-64/ -zxvf gcc-aarch64.tar.gz
-            echo "GCC_64=CROSS_COMPILE=$GITHUB_WORKSPACE/kernel_workspace/gcc-64/bin/aarch64-linux-android-" >> $GITHUB_ENV
-        fi
-        if [ "${{ env.ENABLE_GCC_ARM32 }}" = "true" ]; then
-            mkdir gcc-32
-            wget -q -O gcc-arm.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz
-            tar -C gcc-32/ -zxvf gcc-arm.tar.gz
-            echo "GCC_32=CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/kernel_workspace/gcc-32/bin/arm-linux-androideabi-" >> $GITHUB_ENV
-        fi
+      - name: Download Gcc-aosp
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace
+          if [ "${{ env.ENABLE_GCC_ARM64 }}" = "true" ]; then
+              mkdir gcc-64
+              wget -q -O gcc-aarch64.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz
+              tar -C gcc-64/ -zxvf gcc-aarch64.tar.gz
+              echo "GCC_64=CROSS_COMPILE=$GITHUB_WORKSPACE/kernel_workspace/gcc-64/bin/aarch64-linux-android-" >> $GITHUB_ENV
+          fi
+          if [ "${{ env.ENABLE_GCC_ARM32 }}" = "true" ]; then
+              mkdir gcc-32
+              wget -q -O gcc-arm.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz
+              tar -C gcc-32/ -zxvf gcc-arm.tar.gz
+              echo "GCC_32=CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/kernel_workspace/gcc-32/bin/arm-linux-androideabi-" >> $GITHUB_ENV
+          fi
 
-    - name: Download kernel source
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        git clone --recursive ${{ env.KERNEL_SOURCE }} -b ${{ env.KERNEL_SOURCE_BRANCH }} android-kernel --depth=1
+      - name: Download kernel source
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace
+          git clone --recursive ${{ env.KERNEL_SOURCE }} -b ${{ env.KERNEL_SOURCE_BRANCH }} android-kernel --depth=1
 
-    - name: Setup SukiSU-Ultra
-      if: env.ENABLE_KERNELSU == 'true'
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
+      - name: Setup SukiSU-Ultra
+        if: env.ENABLE_KERNELSU == 'true'
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
 
-    - name: Setup Configuration for Kernel
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        DEFCONFIG="arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}"
-        
-        # 1. 注入 KSU 等必要配置
-        echo "CONFIG_KSU=y" >> $DEFCONFIG
-        echo "CONFIG_KSU_SUKI_ULTRA=y" >> $DEFCONFIG
-        echo "CONFIG_MODULES=y" >> $DEFCONFIG
-        echo "CONFIG_KPROBES=y" >> $DEFCONFIG
-        echo "CONFIG_OVERLAY_FS=y" >> $DEFCONFIG
-        
-        # 2. 安全的 warning 修复（避免 =return-type 被当成文件名）
-        find . -type f \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) | xargs sed -i \
-          -e 's/-Werror=return-type/-Wno-return-type/g' \
-          -e 's/-Wno-error=return-type/-Wno-return-type/g' \
-          -e 's/-Werror=implicit-function-declaration/-Wno-implicit-function-declaration/g' \
-          -e 's/-Wno-error=implicit-function-declaration/-Wno-implicit-function-declaration/g' \
-          -e 's/-Werror=unused-function/-Wno-unused-function/g' \
-          -e 's/-Werror=unused-variable/-Wno-unused-variable/g' \
-          -e 's/-Werror=maybe-uninitialized/-Wno-maybe-uninitialized/g' \
-          -e '/-Werror/ s//-Wno-error/g'
-        
-        # 3. 特定文件修复
-        sed -i 's/int is_ib_init_succeed() {/int is_ib_init_succeed(void) {/' drivers/input/input_booster.c
-        sed -i 's/if ((checkflag (checkflag \& 0x04) != 1 0x04) == 0)/if ((checkflag \& 0x04) == 0)/g' \
-          drivers/misc/mediatek/cam_cal/src/common/v1/eeprom_i2c_common_driver.c
+      - name: Setup Configuration for Kernel
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+          DEFCONFIG="arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}"
+          
+          # 1. 注入 KSU 配置
+          echo "CONFIG_KSU=y" >> $DEFCONFIG
+          echo "CONFIG_KSU_SUKI_ULTRA=y" >> $DEFCONFIG
+          echo "CONFIG_MODULES=y" >> $DEFCONFIG
+          echo "CONFIG_KPROBES=y" >> $DEFCONFIG
+          echo "CONFIG_OVERLAY_FS=y" >> $DEFCONFIG
+          
+          # 2. 安全的 warning 修复（避免 =return-type 等问题）
+          find . -type f \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) | xargs sed -i \
+            -e 's/-Werror=return-type/-Wno-return-type/g' \
+            -e 's/-Wno-error=return-type/-Wno-return-type/g' \
+            -e 's/-Werror=implicit-function-declaration/-Wno-implicit-function-declaration/g' \
+            -e 's/-Wno-error=implicit-function-declaration/-Wno-implicit-function-declaration/g' \
+            -e 's/-Werror=unused-function/-Wno-unused-function/g' \
+            -e 's/-Werror=unused-variable/-Wno-unused-variable/g' \
+            -e 's/-Werror=maybe-uninitialized/-Wno-maybe-uninitialized/g' \
+            -e '/-Werror/ s//-Wno-error/g'
+          
+          # 3. 修复 SukiSU-Ultra / KernelSU 在 4.19 内核的 MODULE_IMPORT_NS 语法错误
+          # 用 #if 守卫，只在 >=5.10 内核生效
+          sed -i '/MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver)/i \
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5,10,0)' drivers/kernelsu/ksu.c
+          
+          sed -i '/MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver)/a \
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(5,10,0) */' drivers/kernelsu/ksu.c
+          
+          # 如果有带引号的变体，也处理
+          sed -i 's/MODULE_IMPORT_NS("VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver")/MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver)/g' drivers/kernelsu/ksu.c
+          
+          # 4. 原有特定文件语法修复
+          sed -i 's/int is_ib_init_succeed() {/int is_ib_init_succeed(void) {/' drivers/input/input_booster.c
+          sed -i 's/if ((checkflag (checkflag \& 0x04) != 1 0x04) == 0)/if ((checkflag \& 0x04) == 0)/g' \
+            drivers/misc/mediatek/cam_cal/src/common/v1/eeprom_i2c_common_driver.c
 
-    - name: Build kernel
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-        export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin:$PATH
-        export KBUILD_BUILD_HOST=Github-Action
-        export KBUILD_BUILD_USER="Gemini"
-        
-        echo ">>> 生成 .config"
-        make O=out ARCH=${{ env.ARCH }} ${{ env.GCC_64 }} ${{ env.GCC_32 }} ${{ env.KERNEL_CONFIG }}
-        
-        echo ">>> 正式编译（加强覆盖）"
-        make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} \
-          CC="clang" \
-          ${{ env.GCC_64 }} ${{ env.GCC_32 }} \
-          ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} \
-          KCFLAGS="-w -Wno-error -Wno-return-type -Wno-implicit-function-declaration -Wno-unused -Wno-sequence-point -Wno-maybe-uninitialized" \
-          KCPPFLAGS="-w -Wno-error" \
-          WERROR=0
-        
-        if [ -f "out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}" ]; then
-          echo "CHECK_FILE_IS_OK=true" >> $GITHUB_ENV
-        else
-          echo "Build Failed: Image not found"
-          exit 1
-        fi
+      - name: Build kernel
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+          export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin:$PATH
+          export KBUILD_BUILD_HOST=Github-Action
+          export KBUILD_BUILD_USER="Gemini"
+          
+          echo ">>> 生成 .config"
+          make O=out ARCH=${{ env.ARCH }} ${{ env.GCC_64 }} ${{ env.GCC_32 }} ${{ env.KERNEL_CONFIG }}
+          
+          echo ">>> 正式编译（加强覆盖参数）"
+          make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} \
+            CC="clang" \
+            ${{ env.GCC_64 }} ${{ env.GCC_32 }} \
+            ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} \
+            KCFLAGS="-w -Wno-error -Wno-return-type -Wno-implicit-function-declaration -Wno-unused -Wno-sequence-point -Wno-maybe-uninitialized" \
+            KCPPFLAGS="-w -Wno-error" \
+            WERROR=0
+          
+          if [ -f "out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}" ]; then
+            echo "CHECK_FILE_IS_OK=true" >> $GITHUB_ENV
+          else
+            echo "Build Failed: Image not found"
+            exit 1
+          fi
 
-    - name: Make Anykernel3
-      if: env.CHECK_FILE_IS_OK == 'true'
-      run: |
-        cd $GITHUB_WORKSPACE/kernel_workspace
-        git clone https://github.com/osm0sis/AnyKernel3 --depth=1 AnyKernel3
-        sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
-        sed -i 's!BLOCK=.*!BLOCK=/dev/block/by-name/boot;!g' AnyKernel3/anykernel.sh
-        cp android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }} AnyKernel3/
-        cd AnyKernel3 && zip -r ../SukiSU-Ultra-A04.zip *
+      - name: Make Anykernel3
+        if: env.CHECK_FILE_IS_OK == 'true'
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace
+          git clone https://github.com/osm0sis/AnyKernel3 --depth=1 AnyKernel3
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
+          sed -i 's!BLOCK=.*!BLOCK=/dev/block/by-name/boot;!g' AnyKernel3/anykernel.sh
+          cp android-kernel/out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }} AnyKernel3/
+          cd AnyKernel3 && zip -r ../SukiSU-Ultra-A04.zip *
 
-    - name: Upload Artifact
-      if: env.CHECK_FILE_IS_OK == 'true'
-      uses: actions/upload-artifact@v4
-      with:
-        name: SukiSU-Ultra-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
-        path: kernel_workspace/SukiSU-Ultra-A04.zip
+      - name: Upload Artifact
+        if: env.CHECK_FILE_IS_OK == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: SukiSU-Ultra-${{ env.DEVICE }}-${{ env.BUILD_TIME }}
+          path: kernel_workspace/SukiSU-Ultra-A04.zip
