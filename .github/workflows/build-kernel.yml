@@ -88,26 +88,44 @@ jobs:
           # 4. 修复 MTK 驱动语法
           [ -f "drivers/input/input_booster.c" ] && sed -i 's/int is_ib_init_succeed() {/int is_ib_init_succeed(void) {/' drivers/input/input_booster.c
 
-      - name: Build kernel
+      - name: Build Kernel
         run: |
+          # 进入内核目录
           cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+          
+          # 1. 自动修复所有文件的换行符 (解决 Kconfig 和 Makefile 解析错误)
+          echo "正在修复换行符和非法字符..."
+          find . -type f \( -name "Makefile*" -o -name "Kconfig*" -o -name "*.h" -o -name "*.c" \) -exec sed -i 's/\r//g' {} +
+          
+          # 2. 移除可能导致解析失败的非法 '+' 号（针对你日志中的 touchscreen 驱动）
+          find drivers/input/touchscreen/ -name "Kconfig*" -exec sed -i 's/+//g' {} +
+      
+          # 3. 设置环境变量
           export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin:$PATH
           GCC64="$GITHUB_WORKSPACE/kernel_workspace/gcc-64/bin/aarch64-linux-android-"
           GCC32="$GITHUB_WORKSPACE/kernel_workspace/gcc-32/bin/arm-linux-androideabi-"
           
-          # 强制禁用所有警告转错误
+          # 强制禁用警告转错误
           export KCFLAGS="-w -Wno-error"
           export KCPPFLAGS="-w -Wno-error"
-
-          make O=out ARCH=arm64 CROSS_COMPILE=$GCC64 CROSS_COMPILE_ARM32=$GCC32 ${{ env.KERNEL_CONFIG }}
+          
+          # 4. 生成配置
+          echo "正在生成配置: $KERNEL_CONFIG"
+          make O=out ARCH=arm64 CROSS_COMPILE=$GCC64 CROSS_COMPILE_ARM32=$GCC32 $KERNEL_CONFIG
+          
+          # 5. 编译
+          echo "开始编译内核..."
           make -j$(nproc --all) O=out ARCH=arm64 \
             CC="clang" \
             CROSS_COMPILE=$GCC64 \
             CROSS_COMPILE_ARM32=$GCC32 \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             LD=ld.lld \
-            KCFLAGS="-w -Wno-error" \
-            KCPPFLAGS="-w -Wno-error"
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip
 
       - name: Upload Artifact
         run: |
