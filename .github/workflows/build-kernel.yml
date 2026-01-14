@@ -1,7 +1,6 @@
 name: Build Samsung A04 SukiSU-Ultra
 on:
   workflow_dispatch:
-
 jobs:
   build:
     name: Build SukiSU-Ultra by ${{ github.actor }}
@@ -10,7 +9,6 @@ jobs:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
       CCACHE_NOHASHDIR: "true"
       CCACHE_HARDLINK: "true"
-
     steps:
     - uses: actions/checkout@v4
 
@@ -95,22 +93,25 @@ jobs:
         cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
         DEFCONFIG="arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}"
         
-        # 1. 注入 KSU 配置
+        # 1. 注入 KSU 等必要配置
         echo "CONFIG_KSU=y" >> $DEFCONFIG
         echo "CONFIG_KSU_SUKI_ULTRA=y" >> $DEFCONFIG
         echo "CONFIG_MODULES=y" >> $DEFCONFIG
         echo "CONFIG_KPROBES=y" >> $DEFCONFIG
         echo "CONFIG_OVERLAY_FS=y" >> $DEFCONFIG
-
-        # 2. 【核心暴力修复】彻底解决 '=return-type' 报错
-        # 第一步：把所有 "-Wno-error=xxx" 替换为简单的 "-Wno-error"，消除等号解析歧义
-        find . -type f \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) -exec sed -i 's/-Wno-error=[^ ]*/-Wno-error/g' {} +
-        # 第二步：移除所有独立的 -Werror，防止警告变错误
-        find . -type f \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) -exec sed -i 's/-Werror//g' {} +
-        # 第三步：修复 Clang 不认识的 GCC 指令
-        find . -type f \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) -exec sed -i 's/-implicit-function-declaration/-Wno-implicit-function-declaration/g' {} +
-
-        # 3. 修复三星 MTK 驱动特定的语法错误
+        
+        # 2. 安全的 warning 修复（避免 =return-type 被当成文件名）
+        find . -type f \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) | xargs sed -i \
+          -e 's/-Werror=return-type/-Wno-return-type/g' \
+          -e 's/-Wno-error=return-type/-Wno-return-type/g' \
+          -e 's/-Werror=implicit-function-declaration/-Wno-implicit-function-declaration/g' \
+          -e 's/-Wno-error=implicit-function-declaration/-Wno-implicit-function-declaration/g' \
+          -e 's/-Werror=unused-function/-Wno-unused-function/g' \
+          -e 's/-Werror=unused-variable/-Wno-unused-variable/g' \
+          -e 's/-Werror=maybe-uninitialized/-Wno-maybe-uninitialized/g' \
+          -e '/-Werror/ s//-Wno-error/g'
+        
+        # 3. 特定文件修复
         sed -i 's/int is_ib_init_succeed() {/int is_ib_init_succeed(void) {/' drivers/input/input_booster.c
         sed -i 's/if ((checkflag (checkflag \& 0x04) != 1 0x04) == 0)/if ((checkflag \& 0x04) == 0)/g' \
           drivers/misc/mediatek/cam_cal/src/common/v1/eeprom_i2c_common_driver.c
@@ -121,19 +122,19 @@ jobs:
         export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin:$PATH
         export KBUILD_BUILD_HOST=Github-Action
         export KBUILD_BUILD_USER="Gemini"
-
+        
         echo ">>> 生成 .config"
         make O=out ARCH=${{ env.ARCH }} ${{ env.GCC_64 }} ${{ env.GCC_32 }} ${{ env.KERNEL_CONFIG }}
-
-        echo ">>> 正式编译 (注入最简化的强行覆盖参数)"
-        # 核心：KCFLAGS 只给最简单的参数，不带任何等号
+        
+        echo ">>> 正式编译（加强覆盖）"
         make -j$(nproc --all) O=out ARCH=${{ env.ARCH }} \
           CC="clang" \
           ${{ env.GCC_64 }} ${{ env.GCC_32 }} \
           ${{ env.CUSTOM_CMDS }} ${{ env.EXTRA_CMDS }} \
-          KCFLAGS="-w -Wno-error" \
-          KCPPFLAGS="-w -Wno-error"
-
+          KCFLAGS="-w -Wno-error -Wno-return-type -Wno-implicit-function-declaration -Wno-unused -Wno-sequence-point -Wno-maybe-uninitialized" \
+          KCPPFLAGS="-w -Wno-error" \
+          WERROR=0
+        
         if [ -f "out/arch/${{ env.ARCH }}/boot/${{ env.KERNEL_IMAGE_NAME }}" ]; then
           echo "CHECK_FILE_IS_OK=true" >> $GITHUB_ENV
         else
