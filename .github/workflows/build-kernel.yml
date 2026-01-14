@@ -94,19 +94,24 @@ jobs:
           cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
           DEFCONFIG="arch/${{ env.ARCH }}/configs/${{ env.KERNEL_CONFIG }}"
           
+          # 1. 注入配置
           echo "CONFIG_KSU=y" >> $DEFCONFIG
           echo "CONFIG_KSU_SUKI_ULTRA=y" >> $DEFCONFIG
           echo "CONFIG_MODULES=y" >> $DEFCONFIG
           echo "CONFIG_KPROBES=y" >> $DEFCONFIG
           echo "CONFIG_OVERLAY_FS=y" >> $DEFCONFIG
           
-          # 2. 物理层面移除 = 号，防止 Clang 拆分参数报错
+          # 2. 暴力解决 4.19 内核不认识 MODULE_IMPORT_NS 的问题
+          # 直接删除包含这个宏的整行，因为 4.19 不需要它
+          sed -i '/MODULE_IMPORT_NS/d' drivers/kernelsu/ksu.c
+
+          # 3. 物理层面移除 = 号参数和 Werror
           find . -type f \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) | xargs sed -i \
             -e 's/-Wno-error=[^ ]*/-Wno-error/g' \
             -e 's/-Werror//g' \
             -e 's/-implicit-function-declaration/-Wno-implicit-function-declaration/g'
           
-          # 3. 修复 4.19 的兼容性
+          # 4. 原有特定文件语法修复
           sed -i 's/int is_ib_init_succeed() {/int is_ib_init_succeed(void) {/' drivers/input/input_booster.c
           sed -i 's/if ((checkflag (checkflag \& 0x04) != 1 0x04) == 0)/if ((checkflag \& 0x04) == 0)/g' \
             drivers/misc/mediatek/cam_cal/src/common/v1/eeprom_i2c_common_driver.c
