@@ -34,8 +34,7 @@ jobs:
             liblz4-tool make optipng maven libssl-dev pwgen libswitch-perl \
             policycoreutils minicom libxml-sax-base-perl libxml-simple-perl bc \
             libc6-dev-i386 lib32ncurses5-dev libx11-dev lib32z-dev \
-            libgl1-mesa-dev xsltproc unzip device-tree-compiler python2 python3 \
-            perl
+            libgl1-mesa-dev xsltproc unzip device-tree-compiler python2 python3
           sudo ln -sf /usr/bin/python2 /usr/bin/python
           mkdir -p $GITHUB_WORKSPACE/kernel_workspace
 
@@ -66,11 +65,11 @@ jobs:
           cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s main
 
-      - name: Fix Kernel Source Common Issues
+      - name: Fix Kernel Source Issues
         run: |
           cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
           
-          echo "=== 修复内核源码常见问题 ==="
+          echo "=== 修复内核源码问题 ==="
           
           # 1. 修复换行符
           echo "修复换行符..."
@@ -86,268 +85,26 @@ jobs:
           # 4. 删除4.19不支持的宏
           find . -name "ksu.c" -exec sed -i '/MODULE_IMPORT_NS/d' {} + 2>/dev/null || true
           
-          # 5. 修复Makefile语法错误（简单注释问题行）
-          if [ -f "Makefile" ]; then
-            cp Makefile Makefile.backup
-            # 注释有问题的941行
-            sed -i '941s/^/# Fixed: /' Makefile 2>/dev/null || true
+          # 5. 修复MTK ftrace头文件问题
+          echo "修复MTK ftrace头文件问题..."
+          if [ -f "kernel/trace/mtk_trace.c" ] && [ -f "kernel/trace/mtk_ftrace.h" ]; then
+            echo "修复mtk_trace.c中的头文件包含..."
+            sed -i 's/#include \"\.\/mtk_ftrace\.h\"/#include \"mtk_ftrace.h\"/g' kernel/trace/mtk_trace.c 2>/dev/null || true
+          fi
+          
+          # 6. 检查并修复头文件路径
+          if [ -f "kernel/trace/mtk_ftrace.h" ]; then
+            echo "mtk_ftrace.h文件存在，检查依赖..."
+            # 确保mtk_ftrace.h包含正确的路径
+            sed -i 's/#include \".*mtk_ftrace\.h\"/#include \"mtk_ftrace.h\"/g' kernel/trace/*.c 2>/dev/null || true
           fi
 
-      - name: Fix KernelSU Issues
-        if: env.ENABLE_KERNELSU == 'true'
+      - name: Fix Trace Header Issues
         run: |
           cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
           
-          echo "=== 修复KernelSU问题 ==="
+          echo "=== 修复跟踪头文件问题 ==="
           
-          # 修复TWA_RESUME未定义问题（对于4.19内核）
-          if [ -f "drivers/kernelsu/allowlist.c" ]; then
-            echo "修复KernelSU allowlist.c..."
-            
-            # 备份原文件
-            cp drivers/kernelsu/allowlist.c drivers/kernelsu/allowlist.c.backup
-            
-            # 对于Linux 4.19内核，TWA_RESUME可能不存在，使用TWA_SIGNAL或0
-            # 首先尝试查找task_work.h中的定义
-            if grep -q "TWA_RESUME" drivers/kernelsu/allowlist.c; then
-              echo "发现TWA_RESUME，进行修复..."
-              
-              # 方法1：替换为TWA_SIGNAL（更可能存在的宏）
-              sed -i 's/TWA_RESUME/TWA_SIGNAL/g' drivers/kernelsu/allowlist.c
-              
-              # 如果TWA_SIGNAL也不存在，最终回退到0
-              echo "如果TWA_SIGNAL不存在，请手动检查task_work.h头文件"
-            fi
-            
-            # 确保包含正确的头文件
-            if ! grep -q "#include <linux/task_work.h>" drivers/kernelsu/allowlist.c; then
-              sed -i '1i #include <linux/task_work.h>' drivers/kernelsu/allowlist.c
-            fi
-          fi
-
-      - name: Fix GPU Driver Warnings with Perl
-        run: |
-          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-          
-          echo "=== 使用Perl修复GPU驱动警告 ==="
-          
-          # 修复MTK GPU驱动的格式警告
-          GPU_FILE="drivers/gpu/mediatek/gpu_rgx/m1.13ED5776728/services/system/rogue/rgx_mtk/mt6765/mtk_mfgsys.c"
-          
-          if [ -f "$GPU_FILE" ]; then
-            echo "修复$GPU_FILE中的格式警告..."
-            
-            # 备份原文件
-            cp "$GPU_FILE" "${GPU_FILE}.bak"
-            
-            # 使用Perl进行安全的正则替换
-            if command -v perl >/dev/null 2>&1; then
-              # 修复(g_pvRegsKM + 地址)的格式警告
-              perl -i -pe 's/\(g_pvRegsKM\s*\+\s*(0x5[0-9a-fA-F]{2})\)/\(unsigned long\)(g_pvRegsKM + $1)/g' "$GPU_FILE"
-              
-              # 删除未使用的ERROR标签
-              perl -i -pe 's/^ERROR:.*$//g' "$GPU_FILE"
-              perl -i -pe 's/goto ERROR;//g' "$GPU_FILE"
-              
-              echo "使用Perl修复完成"
-            else
-              echo "Perl不可用，跳过GPU文件修复"
-            fi
-          fi
-          
-          # 修复其他GPU文件
-          echo "修复其他GPU文件格式问题..."
-          find drivers/gpu/mediatek/ -name "*.c" -type f 2>/dev/null | head -10 | while read file; do
-            if [ -f "$file" ] && command -v perl >/dev/null 2>&1; then
-              # 修复%p格式为%lx
-              perl -i -pe 's/\%p/\%lx/g' "$file" 2>/dev/null || true
-              perl -i -pe 's/"0x\%p"/"0x\%lx"/g' "$file" 2>/dev/null || true
-            fi
-          done
-
-      - name: Setup Kernel Configuration
-        run: |
-          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-          
-          echo "=== 设置内核配置 ==="
-          
-          DEFCONFIG="arch/arm64/configs/${{ env.KERNEL_CONFIG }}"
-          
-          # 添加必要的KernelSU配置
-          if [ "$ENABLE_KERNELSU" = "true" ]; then
-            echo "添加KernelSU配置..."
-            {
-              echo "# KernelSU Configuration"
-              echo "CONFIG_KSU=y"
-              echo "CONFIG_KSU_SUKI_ULTRA=y"
-              echo "CONFIG_KPROBES=y"
-              echo "CONFIG_HAVE_KPROBES=y"
-              echo "CONFIG_KPROBE_EVENTS=y"
-              echo "CONFIG_OVERLAY_FS=y"
-              echo "CONFIG_MODULES=y"
-            } >> "$DEFCONFIG"
-          else
-            echo "CONFIG_MODULES=y" >> "$DEFCONFIG"
-          fi
-          
-          # 显示添加的配置
-          echo "已添加的配置："
-          tail -10 "$DEFCONFIG"
-
-      - name: Build Kernel with Suppressed Warnings
-        run: |
-          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-          
-          echo "=== 开始编译内核（抑制警告） ==="
-          
-          # 设置环境变量
-          export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin:$PATH
-          GCC64="$GITHUB_WORKSPACE/kernel_workspace/gcc-64/bin/aarch64-linux-android-"
-          GCC32="$GITHUB_WORKSPACE/kernel_workspace/gcc-32/bin/arm-linux-androideabi-"
-          
-          # 彻底禁用所有编译警告
-          export KCFLAGS="-w -Wno-everything -Wno-unused-command-line-argument"
-          export KBUILD_CFLAGS="-w -Wno-everything"
-          
-          # 清理环境
-          echo "清理构建环境..."
-          make mrproper 2>/dev/null || true
-          rm -rf out 2>/dev/null || true
-          
-          # 验证工具链
-          echo "验证工具链..."
-          echo "Clang: $(clang --version | head -1)"
-          echo "GCC: $(${GCC64}gcc --version | head -1)"
-          
-          # 生成配置
-          echo "生成内核配置: $KERNEL_CONFIG"
-          make ARCH=arm64 CROSS_COMPILE="$GCC64" $KERNEL_CONFIG
-          
-          # 确保关键配置已启用
-          echo "确保关键配置..."
-          {
-            echo "CONFIG_MODULES=y"
-            [ "$ENABLE_KERNELSU" = "true" ] && echo "CONFIG_KSU=y"
-            [ "$ENABLE_KERNELSU" = "true" ] && echo "CONFIG_KPROBES=y"
-          } >> .config
-          
-          # 更新配置
-          echo "更新配置..."
-          make ARCH=arm64 CROSS_COMPILE="$GCC64" olddefconfig
-          
-          # 显示关键配置
-          echo "关键配置状态："
-          grep -E "CONFIG_(MODULES|KSU|KPROBES)=" .config || true
-          
-          # 开始编译
-          echo "开始编译内核..."
-          echo "使用核心数: $(nproc --all)"
-          
-          # 编译命令 - 使用clang
-          make -j$(nproc --all) ARCH=arm64 \
-            CC="clang" \
-            HOSTCC="clang" \
-            HOSTCXX="clang++" \
-            CROSS_COMPILE="$GCC64" \
-            CROSS_COMPILE_ARM32="$GCC32" \
-            CLANG_TRIPLE="aarch64-linux-gnu-" \
-            KCFLAGS="-w -Wno-everything" \
-            2>&1 | tee /tmp/kernel_build.log || {
-              echo "Clang编译失败，尝试使用GCC..."
-              
-              # 如果clang失败，尝试使用GCC
-              make clean
-              make -j$(nproc --all) ARCH=arm64 CROSS_COMPILE="$GCC64" 2>&1 | tee /tmp/kernel_build_gcc.log
-            }
-          
-          # 检查编译结果
-          if [ -f "arch/arm64/boot/Image.gz" ]; then
-            echo "✅ 内核编译成功！"
-            ls -lh arch/arm64/boot/Image.gz
-            echo "文件大小: $(stat -c%s arch/arm64/boot/Image.gz) 字节"
-          elif [ -f "arch/arm64/boot/Image" ]; then
-            echo "✅ 内核编译成功（未压缩）！"
-            ls -lh arch/arm64/boot/Image
-            # 如果需要，压缩Image为Image.gz
-            gzip -c arch/arm64/boot/Image > arch/arm64/boot/Image.gz
-          else
-            echo "❌ 内核编译失败"
-            echo "=== 最后50行错误日志 ==="
-            tail -50 /tmp/kernel_build.log 2>/dev/null || tail -50 /tmp/kernel_build_gcc.log 2>/dev/null || echo "无日志文件"
-            
-            # 尝试查找具体错误
-            echo "=== 查找错误信息 ==="
-            grep -i "error:" /tmp/kernel_build.log 2>/dev/null | head -20
-            grep -i "fatal:" /tmp/kernel_build.log 2>/dev/null | head -20
-            
-            exit 1
-          fi
-
-      - name: Package Kernel Image
-        if: success()
-        run: |
-          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
-          
-          echo "=== 打包内核镜像 ==="
-          
-          # 创建输出目录
-          OUTPUT_DIR="$GITHUB_WORKSPACE/output"
-          mkdir -p "$OUTPUT_DIR"
-          
-          # 复制内核镜像
-          if [ -f "arch/arm64/boot/Image.gz" ]; then
-            KERNEL_IMAGE="arch/arm64/boot/Image.gz"
-          elif [ -f "arch/arm64/boot/Image" ]; then
-            KERNEL_IMAGE="arch/arm64/boot/Image"
-            # 压缩Image
-            gzip -c "$KERNEL_IMAGE" > "$OUTPUT_DIR/Image.gz"
-            KERNEL_IMAGE="$OUTPUT_DIR/Image.gz"
-          else
-            echo "错误：未找到内核镜像"
-            exit 1
-          fi
-          
-          # 复制到输出目录
-          if [ "$KERNEL_IMAGE" != "$OUTPUT_DIR/Image.gz" ]; then
-            cp "$KERNEL_IMAGE" "$OUTPUT_DIR/Image.gz"
-          fi
-          
-          # 如果有模块，也打包
-          if [ -d "modules" ]; then
-            echo "复制内核模块..."
-            cp -r modules "$OUTPUT_DIR/" 2>/dev/null || true
-          fi
-          
-          # 创建zip包
-          cd "$OUTPUT_DIR"
-          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-          ZIP_NAME="kernel_a04_${TIMESTAMP}.zip"
-          
-          zip -r "$ZIP_NAME" ./*
-          
-          echo "✅ 打包完成"
-          echo "文件: $ZIP_NAME"
-          ls -lh "$ZIP_NAME"
-          
-          # 保存文件名供后续步骤使用
-          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
-
-      - name: Upload Kernel Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Kernel-A04-Build
-          path: |
-            ${{ github.workspace }}/output/*.zip
-            ${{ github.workspace }}/kernel_workspace/android-kernel/arch/arm64/boot/Image.gz
-          retention-days: 7
-
-      - name: Upload Build Logs on Failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: Build-Failure-Logs
-          path: |
-            /tmp/kernel_build.log
-            /tmp/kernel_build_gcc.log
-            ${{ github.workspace }}/kernel_workspace/android-kernel/.config
-          retention-days: 30
+          # 修复mtk_trace.c中的头文件包含
+          MTK_TRACE_FILE="kernel/trace/mtk_trace.c"
+          if [ -f "$MTK_TRACE
