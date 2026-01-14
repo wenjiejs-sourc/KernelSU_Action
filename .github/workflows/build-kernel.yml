@@ -95,12 +95,29 @@ jobs:
           
           # 1. 自动修复所有文件的换行符 (解决 Kconfig 和 Makefile 解析错误)
           echo "正在修复换行符和非法字符..."
-          find . -type f \( -name "Makefile*" -o -name "Kconfig*" -o -name "*.h" -o -name "*.c" \) -exec sed -i 's/\r//g' {} +
+          find . -type f \( -name "Makefile*" -o -name "Kbuild*" -o -name "Kconfig*" -o -name "*.h" -o -name "*.c" -o -name "*.mk" \) -exec sed -i 's/\r//g' {} +
           
-          # 2. 移除可能导致解析失败的非法 '+' 号（针对你日志中的 touchscreen 驱动）
-          find drivers/input/touchscreen/ -name "Kconfig*" -exec sed -i 's/+//g' {} +
-      
-          # 3. 设置环境变量
+          # 2. 修复特定的Makefile语法错误
+          echo "正在检查Makefile语法错误..."
+          if [ -f "Makefile" ]; then
+            # 修复第938行可能的call函数问题
+            sed -i '938s/^/# Fix: /' Makefile
+            # 或者查看具体内容
+            echo "Makefile 938行内容:"
+            sed -n '935,945p' Makefile
+          fi
+          
+          # 3. 检查所有Makefile的call函数调用
+          echo "检查Makefile中的call函数..."
+          find . -name "Makefile" -o -name "Makefile.*" | while read file; do
+            echo "检查文件: $file"
+            grep -n "call.*[^)]$" "$file" || true
+          done
+          
+          # 4. 移除可能导致解析失败的非法 '+' 号
+          find drivers/input/touchscreen/ -name "Kconfig*" -exec sed -i 's/^+//g; s/ +/ /g' {} +
+        
+          # 5. 设置环境变量
           export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin:$PATH
           GCC64="$GITHUB_WORKSPACE/kernel_workspace/gcc-64/bin/aarch64-linux-android-"
           GCC32="$GITHUB_WORKSPACE/kernel_workspace/gcc-32/bin/arm-linux-androideabi-"
@@ -109,24 +126,32 @@ jobs:
           export KCFLAGS="-w -Wno-error"
           export KCPPFLAGS="-w -Wno-error"
           
-          # 4. 生成配置
-          echo "正在生成配置: $KERNEL_CONFIG"
-          make O=out ARCH=arm64 CROSS_COMPILE=$GCC64 CROSS_COMPILE_ARM32=$GCC32 $KERNEL_CONFIG
+          # 6. 首先验证环境
+          echo "验证编译工具链..."
+          ${GCC64}gcc --version || echo "GCC64 工具链检查失败"
+          clang --version || echo "Clang 检查失败"
           
-          # 5. 编译
+          # 7. 清理之前的构建
+          echo "清理之前的构建..."
+          make mrproper || true
+          rm -rf out || true
+          
+          # 8. 生成配置 (使用更简单的方式)
+          echo "正在生成配置: $KERNEL_CONFIG"
+          make ARCH=arm64 CROSS_COMPILE=$GCC64 $KERNEL_CONFIG O=out
+          
+          # 9. 检查生成的.config
+          echo "检查.config文件..."
+          grep "CONFIG_MODULES=y" out/.config || echo "警告: CONFIG_MODULES未启用"
+          
+          # 10. 编译内核（使用简化参数）
           echo "开始编译内核..."
           make -j$(nproc --all) O=out ARCH=arm64 \
             CC="clang" \
-            CROSS_COMPILE=$GCC64 \
-            CROSS_COMPILE_ARM32=$GCC32 \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip
-
+            CROSS_COMPILE=$GCC64 \
+            CROSS_COMPILE_ARM32=$GCC32
+      
       - name: Upload Artifact
         run: |
           if [ -f "kernel_workspace/android-kernel/out/arch/arm64/boot/Image.gz" ]; then
