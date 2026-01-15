@@ -73,8 +73,7 @@ jobs:
           
           # 1. 修复换行符
           echo "修复换行符..."
-          find . -type f \( -name "*.c" -o -name "*.h" -o -name "Makefile*" -o -name "Kconfig*" \) \
-            -exec sed -i 's/\r//g' {} + 2>/dev/null || true
+          find . -type f \( -name "*.c" -o -name "*.h" -o -name "Makefile*" -o -name "Kconfig*" \) -exec sed -i 's/\r//g' {} + 2>/dev/null || true
           
           # 2. 修复Kconfig中的+号问题
           find drivers/input/touchscreen/ -name "Kconfig*" -exec sed -i 's/^+//g' {} + 2>/dev/null || true
@@ -84,20 +83,6 @@ jobs:
           
           # 4. 删除4.19不支持的宏
           find . -name "ksu.c" -exec sed -i '/MODULE_IMPORT_NS/d' {} + 2>/dev/null || true
-          
-          # 5. 修复MTK ftrace头文件问题
-          echo "修复MTK ftrace头文件问题..."
-          if [ -f "kernel/trace/mtk_trace.c" ] && [ -f "kernel/trace/mtk_ftrace.h" ]; then
-            echo "修复mtk_trace.c中的头文件包含..."
-            sed -i 's/#include \"\.\/mtk_ftrace\.h\"/#include \"mtk_ftrace.h\"/g' kernel/trace/mtk_trace.c 2>/dev/null || true
-          fi
-          
-          # 6. 检查并修复头文件路径
-          if [ -f "kernel/trace/mtk_ftrace.h" ]; then
-            echo "mtk_ftrace.h文件存在，检查依赖..."
-            # 确保mtk_ftrace.h包含正确的路径
-            sed -i 's/#include \".*mtk_ftrace\.h\"/#include \"mtk_ftrace.h\"/g' kernel/trace/*.c 2>/dev/null || true
-          fi
 
       - name: Fix Trace Header Issues
         run: |
@@ -107,4 +92,205 @@ jobs:
           
           # 修复mtk_trace.c中的头文件包含
           MTK_TRACE_FILE="kernel/trace/mtk_trace.c"
-          if [ -f "$MTK_TRACE
+          if [ -f "$MTK_TRACE_FILE" ]; then
+            echo "修复$MTK_TRACE_FILE..."
+            cp "$MTK_TRACE_FILE" "${MTK_TRACE_FILE}.bak"
+            sed -i 's|#include "./mtk_ftrace.h"|#include "mtk_ftrace.h"|g' "$MTK_TRACE_FILE"
+            sed -i 's|#include "mtk_ftrace.h"|#include "mtk_ftrace.h"|g' "$MTK_TRACE_FILE"
+          fi
+          
+          # 确保mtk_ftrace.h存在
+          MTK_FTRACE_HEADER="kernel/trace/mtk_ftrace.h"
+          if [ ! -f "$MTK_FTRACE_HEADER" ]; then
+            echo "创建空的mtk_ftrace.h文件..."
+            mkdir -p kernel/trace
+            cat > "$MTK_FTRACE_HEADER" << 'EOF'
+#ifndef _MTK_FTRACE_H
+#define _MTK_FTRACE_H
+
+#include <linux/trace_events.h>
+
+/* Empty MTK ftrace header for compatibility */
+
+#endif
+EOF
+          fi
+
+      - name: Fix KernelSU Issues
+        if: env.ENABLE_KERNELSU == 'true'
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+          
+          echo "=== 修复KernelSU问题 ==="
+          
+          if [ -f "drivers/kernelsu/allowlist.c" ]; then
+            echo "修复KernelSU兼容性..."
+            cp drivers/kernelsu/allowlist.c drivers/kernelsu/allowlist.c.backup
+            sed -i 's/TWA_RESUME/0/g' drivers/kernelsu/allowlist.c 2>/dev/null || true
+          fi
+
+      - name: Setup Kernel Configuration
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+          
+          echo "=== 设置内核配置 ==="
+          
+          DEFCONFIG="arch/arm64/configs/${{ env.KERNEL_CONFIG }}"
+          
+          # 添加必要的配置
+          cat >> "$DEFCONFIG" << EOF
+# KernelSU Configuration
+CONFIG_KSU=y
+CONFIG_KSU_SUKI_ULTRA=y
+CONFIG_MODULES=y
+CONFIG_KPROBES=y
+CONFIG_HAVE_KPROBES=y
+CONFIG_KPROBE_EVENTS=y
+CONFIG_OVERLAY_FS=y
+# Tracing support
+CONFIG_TRACING=y
+CONFIG_FTRACE=y
+# Disable problematic MTK trace
+CONFIG_MTK_TRACE=n
+EOF
+          
+          echo "配置已更新"
+
+      - name: Build Kernel
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+          
+          echo "=== 开始编译内核 ==="
+          
+          # 设置环境变量
+          export PATH=$GITHUB_WORKSPACE/kernel_workspace/clang-aosp/bin:$PATH
+          GCC64="$GITHUB_WORKSPACE/kernel_workspace/gcc-64/bin/aarch64-linux-android-"
+          GCC32="$GITHUB_WORKSPACE/kernel_workspace/gcc-32/bin/arm-linux-androideabi-"
+          
+          # 设置编译标志
+          export KCFLAGS="-w -Wno-everything -Wno-unused-command-line-argument"
+          export KBUILD_CFLAGS="-w -Wno-everything"
+          
+          # 清理环境
+          echo "清理环境..."
+          make mrproper 2>/dev/null || true
+          
+          # 验证工具链
+          echo "工具链版本:"
+          clang --version | head -1
+          ${GCC64}gcc --version | head -1
+          
+          # 生成配置
+          echo "生成配置: $KERNEL_CONFIG"
+          make ARCH=arm64 CROSS_COMPILE="$GCC64" $KERNEL_CONFIG
+          
+          # 确保关键配置
+          echo "确保关键配置..."
+          cat >> .config << EOF
+CONFIG_MODULES=y
+CONFIG_KSU=y
+CONFIG_KPROBES=y
+CONFIG_TRACING=y
+CONFIG_FTRACE=y
+CONFIG_MTK_TRACE=n
+EOF
+          
+          # 更新配置
+          echo "更新配置..."
+          make ARCH=arm64 CROSS_COMPILE="$GCC64" olddefconfig
+          
+          # 检查配置
+          echo "关键配置状态:"
+          grep -E "CONFIG_(MODULES|KSU|KPROBES|TRACING|FTRACE|MTK_TRACE)=" .config || true
+          
+          # 开始编译
+          echo "开始编译内核 (使用 $(nproc --all) 个核心)..."
+          
+          # 方法1: 使用clang编译
+          echo "=== 方法1: 使用clang编译 ==="
+          set +e
+          make -j$(nproc --all) ARCH=arm64 \
+            CC="clang" \
+            CROSS_COMPILE="$GCC64" \
+            CROSS_COMPILE_ARM32="$GCC32" \
+            CLANG_TRIPLE="aarch64-linux-gnu-" \
+            KCFLAGS="-w -Wno-everything" \
+            2>&1 | tee /tmp/build.log
+          
+          BUILD_RESULT=$?
+          set -e
+          
+          if [ $BUILD_RESULT -eq 0 ] && [ -f "arch/arm64/boot/Image.gz" ]; then
+            echo "✅ 方法1编译成功！"
+          else
+            echo "方法1编译失败，尝试方法2..."
+            
+            # 方法2: 使用GCC编译
+            echo "=== 方法2: 使用GCC编译 ==="
+            make clean
+            set +e
+            make -j$(nproc --all) ARCH=arm64 CROSS_COMPILE="$GCC64" 2>&1 | tee /tmp/build_gcc.log
+            GCC_RESULT=$?
+            set -e
+            
+            if [ $GCC_RESULT -eq 0 ] && [ -f "arch/arm64/boot/Image.gz" ]; then
+              echo "✅ 方法2编译成功！"
+            else
+              echo "❌ 所有编译方法都失败"
+              echo "=== 错误日志 ==="
+              tail -100 /tmp/build.log 2>/dev/null || tail -100 /tmp/build_gcc.log 2>/dev/null
+              exit 1
+            fi
+          fi
+          
+          # 最终检查
+          if [ -f "arch/arm64/boot/Image.gz" ]; then
+            echo "✅ 内核编译成功完成！"
+            ls -lh arch/arm64/boot/Image.gz
+          else
+            echo "❌ 编译失败：未找到内核镜像"
+            exit 1
+          fi
+
+      - name: Package Kernel
+        if: success()
+        run: |
+          cd $GITHUB_WORKSPACE/kernel_workspace/android-kernel
+          
+          echo "=== 打包内核 ==="
+          
+          OUTPUT_DIR="$GITHUB_WORKSPACE/output"
+          mkdir -p "$OUTPUT_DIR"
+          
+          if [ -f "arch/arm64/boot/Image.gz" ]; then
+            cp arch/arm64/boot/Image.gz "$OUTPUT_DIR/"
+            echo "复制Image.gz到输出目录"
+          elif [ -f "arch/arm64/boot/Image" ]; then
+            gzip -c arch/arm64/boot/Image > "$OUTPUT_DIR/Image.gz"
+            echo "压缩Image为Image.gz"
+          fi
+          
+          cd "$OUTPUT_DIR"
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+          ZIP_NAME="kernel_a04_${TIMESTAMP}.zip"
+          zip -r "$ZIP_NAME" ./*
+          
+          echo "✅ 打包完成: $ZIP_NAME"
+          ls -lh "$ZIP_NAME"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kernel-A04
+          path: ${{ github.workspace }}/output/*.zip
+          retention-days: 7
+
+      - name: Upload Build Logs on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Build-Failure-Logs
+          path: |
+            /tmp/build.log
+            /tmp/build_gcc.log
+          retention-days: 30
