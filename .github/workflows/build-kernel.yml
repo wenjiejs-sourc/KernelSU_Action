@@ -84,23 +84,27 @@ jobs:
         cd $KERNEL_DIR
         
         # 1. 修复全局寄存器变量 'sp' 报错 (针对 Clang)
-        # 将 register unsigned long current_stack_pointer asm ("sp") 替换为内联函数
-        sed -i 's/register unsigned long current_stack_pointer asm ("sp");/static inline unsigned long get_current_stack_pointer(void) { unsigned long sp; asm("mov %0, sp" : "=r"(sp)); return sp; }/g' arch/arm64/include/asm/stack_pointer.h
-        # 替换源码中对该变量的调用
-        find arch/arm64 -name "*.c" -o -name "*.h" | xargs sed -i 's/current_stack_pointer/get_current_stack_pointer()/g'
+        # 先直接清空该行，然后写入正确的内联函数定义，避免多次运行导致的嵌套错误
+        echo "static inline unsigned long get_current_stack_pointer(void) { unsigned long sp; asm(\"mov %0, sp\" : \"=r\"(sp)); return sp; }" > arch/arm64/include/asm/stack_pointer.h
+        
+        # 2. 替换源码中所有对 current_stack_pointer 变量的引用为函数调用
+        # 使用 -l 仅列出匹配文件以提高效率
+        find arch/arm64 -name "*.c" -o -name "*.h" | xargs grep -l "current_stack_pointer" | xargs sed -i 's/current_stack_pointer/get_current_stack_pointer()/g' || true
 
-        # 2. 修复 KGDB 'brk 1025' 约束报错
-        # 改变汇编约束，从 "I" (立即数) 改为 "i" (允许符号/常数)
+        # 3. 修复 KGDB 'brk 1025' 约束报错
         sed -i 's/asm ("brk %0" : : "I" (KGDB_COMPILED_DBG_BRK_IMM))/asm ("brk %0" : : "i" (KGDB_COMPILED_DBG_BRK_IMM))/g' arch/arm64/include/asm/kgdb.h
 
-        # 3. 之前已有的修复 (保留)
+        # 4. 物理清洗 Makefile (解决 clang-14 的 =return-type 报错)
         find . -type f \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) -exec sed -i \
           -e 's/-Wno-error=[^ ]*/-Wno-error/g' \
           -e 's/-Werror=[^ ]*/-Wno-error/g' \
           -e 's/-Werror//g' {} +
+        
+        # 5. 兼容性修复
         find . -name "ksu.c" -exec sed -i '/MODULE_IMPORT_NS/d' {} +
         [ -f "drivers/input/input_booster.c" ] && sed -i 's/int is_ib_init_succeed() {/int is_ib_init_succeed(void) {/' drivers/input/input_booster.c
-
+    
+    
     - name: Configure and Build kernel
       run: |
         cd $KERNEL_DIR
