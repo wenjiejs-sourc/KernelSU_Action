@@ -1,4 +1,4 @@
-name: Build Samsung A04 Kernel with Sukisu-Ultra
+name: Build Samsung A04 Kernel with SukiSU-Ultra
 
 on:
   workflow_dispatch:
@@ -46,49 +46,36 @@ jobs:
         cd toolchains
         
         # Download Clang
-        echo "Downloading Clang..."
         wget -q "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/$CLANG_BRANCH/clang-$CLANG_VERSION.tar.gz"
         mkdir -p clang
         tar -C clang -xzf "clang-$CLANG_VERSION.tar.gz"
         
         # Download GCC 64-bit
-        echo "Downloading GCC 64-bit..."
         wget -q -O gcc64.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz
         mkdir -p gcc64
         tar -C gcc64 -xzf gcc64.tar.gz
         
         # Download GCC 32-bit
-        echo "Downloading GCC 32-bit..."
         wget -q -O gcc32.tar.gz https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz
         mkdir -p gcc32
         tar -C gcc32 -xzf gcc32.tar.gz
         
-        # Set environment variables
         echo "CLANG_PATH=$(pwd)/clang/bin" >> $GITHUB_ENV
         echo "GCC64_PATH=$(pwd)/gcc64/bin/aarch64-linux-android-" >> $GITHUB_ENV
         echo "GCC32_PATH=$(pwd)/gcc32/bin/arm-linux-androideabi-" >> $GITHUB_ENV
         
     - name: Clone kernel source
       run: |
-        echo "Cloning kernel source from: $KERNEL_SOURCE"
-        echo "Branch: $KERNEL_BRANCH"
-        
         git clone --depth=1 --branch="$KERNEL_BRANCH" "$KERNEL_SOURCE" kernel-source
-        cd kernel-source
-        echo "KERNEL_DIR=$(pwd)" >> $GITHUB_ENV
+        echo "KERNEL_DIR=$(pwd)/kernel-source" >> $GITHUB_ENV
         
     - name: Setup KernelSU
       if: env.ENABLE_KERNELSU == 'true'
       run: |
         cd $KERNEL_DIR
-        echo "Setting up KernelSU..."
-        
-        # Download and run KernelSU setup script
         curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -s main
-        
-        # Fix KernelSU for 4.19 kernel
+        # 修复 4.19 的 TWA_RESUME 问题
         if [ -f "drivers/kernelsu/allowlist.c" ]; then
-          echo "Fixing KernelSU TWA_RESUME issue for 4.19 kernel..."
           sed -i 's/TWA_RESUME/0/g' drivers/kernelsu/allowlist.c
         fi
         
@@ -96,190 +83,65 @@ jobs:
       run: |
         cd $KERNEL_DIR
         
-        echo "Fixing common kernel compilation issues..."
+        # 1. 彻底移除所有 Makefile 中的 -Werror，并将带等号的警告参数改为安全格式
+        find . -type f \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) -exec sed -i \
+          -e 's/-Wno-error=[^ ]*/-Wno-error/g' \
+          -e 's/-Werror=[^ ]*/-Wno-error/g' \
+          -e 's/-Werror//g' {} +
         
-        # Fix line endings
-        find . -type f \( -name "*.c" -o -name "*.h" -o -name "Makefile*" -o -name "Kconfig*" \) \
-          -exec sed -i 's/\r//g' {} \; 2>/dev/null || true
+        # 2. 移除 4.19 不支持的 KernelSU 宏
+        find . -name "ksu.c" -exec sed -i '/MODULE_IMPORT_NS/d' {} \; 2>/dev/null || true
         
-        # Fix Kconfig syntax issues
-        find drivers/input/touchscreen/ -name "Kconfig*" -exec sed -i 's/^+//g' {} \; 2>/dev/null || true
-        
-        # Fix MTK driver syntax
+        # 3. 修复 MTK 驱动语法错误
         if [ -f "drivers/input/input_booster.c" ]; then
           sed -i 's/int is_ib_init_succeed() {/int is_ib_init_succeed(void) {/' drivers/input/input_booster.c
         fi
-        
-        # Remove unsupported macro for 4.19 kernel
-        find . -name "ksu.c" -exec sed -i '/MODULE_IMPORT_NS/d' {} \; 2>/dev/null || true
-        
-        # Fix mtk_trace header issue
-        if [ -f "kernel/trace/mtk_trace.c" ]; then
-          echo "Fixing mtk_trace header issue..."
-          sed -i 's|#include "./mtk_ftrace.h"|#include "mtk_ftrace.h"|g' kernel/trace/mtk_trace.c
-        fi
-        
-        # Create missing mtk_ftrace.h if needed
-        if [ ! -f "kernel/trace/mtk_ftrace.h" ]; then
-          echo "Creating missing mtk_ftrace.h..."
-          mkdir -p kernel/trace
-          cat > kernel/trace/mtk_ftrace.h << 'EOF'
-#ifndef _MTK_FTRACE_H
-#define _MTK_FTRACE_H
 
-#include <linux/trace_events.h>
-
-/* Empty header for compatibility */
-
-#endif
-EOF
-        fi
-        
-    - name: Configure kernel
+    - name: Configure and Build kernel
       run: |
         cd $KERNEL_DIR
-        
-        echo "Configuring kernel..."
-        
-        # Set up environment
         export PATH=$CLANG_PATH:$PATH
         export ARCH=arm64
         export CROSS_COMPILE=$GCC64_PATH
         export CROSS_COMPILE_ARM32=$GCC32_PATH
         
-        # Clean build directory
-        make clean 2>/dev/null || true
-        make mrproper 2>/dev/null || true
-        
-        # Generate default config
+        # 生成配置
         make $KERNEL_CONFIG
         
-        # Add required configurations
+        # 注入必要内核参数
         cat >> .config << EOF
-# Basic configurations
-CONFIG_MODULES=y
-CONFIG_MODULE_UNLOAD=y
-
-# KernelSU configurations
-CONFIG_KSU=y
-CONFIG_KPROBES=y
-CONFIG_HAVE_KPROBES=y
-CONFIG_KPROBE_EVENTS=y
-CONFIG_OVERLAY_FS=y
-
-# Disable problematic MTK trace
-CONFIG_MTK_TRACE=n
-
-# Enable essential features
-CONFIG_IKCONFIG=y
-CONFIG_IKCONFIG_PROC=y
-EOF
-        
-        # Update configuration
+        CONFIG_KSU=y
+        CONFIG_KPROBES=y
+        CONFIG_OVERLAY_FS=y
+        CONFIG_MODULES=y
+        EOF
         make olddefconfig
-        
-        # Display important configurations
-        echo "Important kernel configurations:"
-        grep -E "CONFIG_(MODULES|KSU|KPROBES|MTK_TRACE)=" .config || true
-        
-    - name: Build kernel
-      run: |
-        cd $KERNEL_DIR
-        
-        echo "Building kernel..."
-        
-        # Set up environment
-        export PATH=$CLANG_PATH:$PATH
-        export ARCH=arm64
-        export CROSS_COMPILE=$GCC64_PATH
-        export CROSS_COMPILE_ARM32=$GCC32_PATH
-        
-        # Disable all warnings to prevent build failures
-        export KCFLAGS="-w -Wno-everything"
-        export KBUILD_CFLAGS="-w -Wno-everything"
-        
-        # Build with all available cores
-        CORES=$(nproc)
-        echo "Building with $CORES cores..."
-        
-        # Try building with Clang first
-        set +e
-        echo "Attempt 1: Building with Clang..."
-        make -j$CORES \
+
+        # 正式编译，强制注入 KCFLAGS 屏蔽所有警告报错
+        make -j$(nproc) \
           CC="clang" \
           CLANG_TRIPLE="aarch64-linux-gnu-" \
           LD=ld.lld \
-          2>&1 | tee build.log
-        
-        if [ $? -eq 0 ] && [ -f "arch/arm64/boot/Image.gz" ]; then
-          echo "✅ Clang build successful!"
-          BUILD_SUCCESS=true
-        else
-          echo "Clang build failed, trying GCC..."
+          KCFLAGS="-w -Wno-error" \
+          KBUILD_CFLAGS="-w -Wno-error" \
+          WERROR=0
           
-          # Try building with GCC
-          make clean
-          echo "Attempt 2: Building with GCC..."
-          make -j$CORES 2>&1 | tee build_gcc.log
-          
-          if [ $? -eq 0 ] && [ -f "arch/arm64/boot/Image.gz" ]; then
-            echo "✅ GCC build successful!"
-            BUILD_SUCCESS=true
-          else
-            echo "❌ Both build attempts failed"
-            BUILD_SUCCESS=false
-          fi
-        fi
-        set -e
-        
-        if [ "$BUILD_SUCCESS" = false ]; then
-          echo "=== Build errors ==="
-          tail -100 build.log 2>/dev/null || tail -100 build_gcc.log 2>/dev/null
-          exit 1
-        fi
-        
-        # Show kernel information
-        echo "Kernel build completed!"
-        echo "Kernel image: arch/arm64/boot/Image.gz"
-        ls -lh arch/arm64/boot/Image.gz
-        
-    - name: Package kernel
+    - name: Package and Upload
       if: success()
       run: |
         cd $KERNEL_DIR
-        
-        echo "Packaging kernel..."
-        
-        # Create output directory
         mkdir -p $GITHUB_WORKSPACE/output
-        
-        # Copy kernel image
-        cp arch/arm64/boot/Image.gz $GITHUB_WORKSPACE/output/
-        
-        # Copy kernel config
-        cp .config $GITHUB_WORKSPACE/output/kernel.config
-        
-        # Create zip package
-        cd $GITHUB_WORKSPACE/output
-        zip -r kernel-a04-$BUILD_TIME.zip .
-        
-        echo "Package created: kernel-a04-$BUILD_TIME.zip"
-        ls -lh *.zip
-        
-    - name: Upload kernel artifact
+        if [ -f "arch/arm64/boot/Image.gz" ]; then
+          cp arch/arm64/boot/Image.gz $GITHUB_WORKSPACE/output/
+          cd $GITHUB_WORKSPACE/output
+          zip -r kernel-A04-SukiSU.zip .
+        else
+          echo "Build failed: Image.gz not found"
+          exit 1
+        fi
+
+    - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: kernel-a04
-        path: |
-          ${{ github.workspace }}/output/*.zip
-        retention-days: 7
-        
-    - name: Upload build logs on failure
-      if: failure()
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-logs
-        path: |
-          ${{ github.workspace }}/kernel-source/build.log
-          ${{ github.workspace }}/kernel-source/build_gcc.log
-        retention-days: 30
+        name: kernel-a04-result
+        path: output/*.zip
