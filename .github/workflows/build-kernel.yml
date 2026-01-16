@@ -83,28 +83,32 @@ jobs:
       run: |
         cd $KERNEL_DIR
         
-        # 1. 强制覆盖 stack_pointer.h (修复 Clang 不支持 sp 寄存器变量的问题)
-        # 使用 echo 直接重写，防止 sed 重复运行导致函数名变成 get_get_...
-        echo "static inline unsigned long get_current_stack_pointer(void) { unsigned long sp; asm(\"mov %0, sp\" : \"=r\"(sp)); return sp; }" > arch/arm64/include/asm/stack_pointer.h
-        
-        # 2. 替换源码中对该变量的调用
-        # 仅在 .c 和 .h 文件中将 current_stack_pointer 替换为 get_current_stack_pointer()
-        find arch/arm64 -name "*.c" -o -name "*.h" | xargs sed -i 's/\bcurrent_stack_pointer\b/get_current_stack_pointer()/g'
+        # 1. 物理移除原本导致报错的定义 (stack_pointer.h)
+        # 直接将该文件内容清空，避免任何重定义冲突
+        echo "/* Fix Clang sp error */" > arch/arm64/include/asm/stack_pointer.h
+
+        # 2. 全局将 current_stack_pointer 替换为内联汇编调用
+        # 这样就不需要全局函数名，直接在原地通过汇编获取 sp
+        # 我们使用一个宏来替代它
+        find arch/arm64 -name "*.c" -o -name "*.h" | xargs sed -i 's/\bcurrent_stack_pointer\b/({ unsigned long sp; asm("mov %0, sp" : "=r"(sp)); sp; })/g'
 
         # 3. 修复 KGDB 汇编约束 (brk 1025 报错)
         if [ -f "arch/arm64/include/asm/kgdb.h" ]; then
           sed -i 's/asm ("brk %0" : : "I" (KGDB_COMPILED_DBG_BRK_IMM))/asm ("brk %0" : : "i" (KGDB_COMPILED_DBG_BRK_IMM))/g' arch/arm64/include/asm/kgdb.h
         fi
 
-        # 4. 彻底清洗 Makefile 防止警告转错误
+        # 4. 彻底清洗所有 Makefile (解决 clang-14 的 =return-type 报错)
+        # 移除 -Werror 并修复带等号的参数被解析成文件名的 Bug
         find . -type f \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) -exec sed -i \
           -e 's/-Wno-error=[^ ]*/-Wno-error/g' \
           -e 's/-Werror=[^ ]*/-Wno-error/g' \
           -e 's/-Werror//g' {} +
         
-        # 5. KernelSU 与 MTK 特定修复
+        # 5. KernelSU 与 MTK 特定补丁
         find . -name "ksu.c" -exec sed -i '/MODULE_IMPORT_NS/d' {} +
-        [ -f "drivers/input/input_booster.c" ] && sed -i 's/int is_ib_init_succeed() {/int is_ib_init_succeed(void) {/' drivers/input/input_booster.c
+        if [ -f "drivers/input/input_booster.c" ]; then
+          sed -i 's/int is_ib_init_succeed() {/int is_ib_init_succeed(void) {/' drivers/input/input_booster.c
+        fi
         
     
     - name: Configure and Build kernel
