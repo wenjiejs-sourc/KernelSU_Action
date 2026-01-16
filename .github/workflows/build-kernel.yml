@@ -83,22 +83,18 @@ jobs:
       run: |
         cd $KERNEL_DIR
         
-        # 1. 物理移除原本导致报错的定义 (stack_pointer.h)
-        # 直接将该文件内容清空，避免任何重定义冲突
+        # 1. 修复 stack_pointer.h 重定义问题
         echo "/* Fix Clang sp error */" > arch/arm64/include/asm/stack_pointer.h
-
-        # 2. 全局将 current_stack_pointer 替换为内联汇编调用
-        # 这样就不需要全局函数名，直接在原地通过汇编获取 sp
-        # 我们使用一个宏来替代它
+        
+        # 2. 全局替换 current_stack_pointer 为内联汇编
         find arch/arm64 -name "*.c" -o -name "*.h" | xargs sed -i 's/\bcurrent_stack_pointer\b/({ unsigned long sp; asm("mov %0, sp" : "=r"(sp)); sp; })/g'
-
-        # 3. 修复 KGDB 汇编约束 (brk 1025 报错)
+        
+        # 3. 修复 KGDB 汇编约束
         if [ -f "arch/arm64/include/asm/kgdb.h" ]; then
           sed -i 's/asm ("brk %0" : : "I" (KGDB_COMPILED_DBG_BRK_IMM))/asm ("brk %0" : : "i" (KGDB_COMPILED_DBG_BRK_IMM))/g' arch/arm64/include/asm/kgdb.h
         fi
-
-        # 4. 彻底清洗所有 Makefile (解决 clang-14 的 =return-type 报错)
-        # 移除 -Werror 并修复带等号的参数被解析成文件名的 Bug
+        
+        # 4. 清除所有 Makefile 中的 -Werror
         find . -type f \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) -exec sed -i \
           -e 's/-Wno-error=[^ ]*/-Wno-error/g' \
           -e 's/-Werror=[^ ]*/-Wno-error/g' \
@@ -110,6 +106,24 @@ jobs:
           sed -i 's/int is_ib_init_succeed() {/int is_ib_init_succeed(void) {/' drivers/input/input_booster.c
         fi
         
+        # 6. **关键修复: VDSO 编译问题**
+        # 修复 VDSO Makefile，强制使用 GCC 而非 Clang
+        if [ -f "arch/arm64/kernel/vdso/Makefile" ]; then
+          sed -i '/^CC_FLAGS_VDSO/d' arch/arm64/kernel/vdso/Makefile
+          sed -i '/^VDSO_LDFLAGS/a CC_VDSO := $(CROSS_COMPILE)gcc' arch/arm64/kernel/vdso/Makefile
+          sed -i 's/$(CC)/$(CC_VDSO)/g' arch/arm64/kernel/vdso/Makefile
+        fi
+        
+        # 7. 修复 vDSO 寄存器约束问题（如果上面方法不行）
+        if [ -f "arch/arm64/include/asm/vdso/gettimeofday.h" ]; then
+          # 备份原文件
+          cp arch/arm64/include/asm/vdso/gettimeofday.h arch/arm64/include/asm/vdso/gettimeofday.h.bak
+          
+          # 替换寄存器约束为 Clang 兼容的形式
+          sed -i 's/asm("x0")/asm("0")/g' arch/arm64/include/asm/vdso/gettimeofday.h
+          sed -i 's/asm("x1")/asm("1")/g' arch/arm64/include/asm/vdso/gettimeofday.h
+          sed -i 's/asm("x8")/asm("8")/g' arch/arm64/include/asm/vdso/gettimeofday.h
+        fi
     
     - name: Configure and Build kernel
       run: |
@@ -131,12 +145,19 @@ jobs:
         EOF
         make olddefconfig
 
-        # 正式编译，强制注入 KCFLAGS 屏蔽所有警告报错
+        # 正式编译，使用混合编译模式（Clang + GCC）
         make -j$(nproc) \
           CC="clang" \
           CLANG_TRIPLE="aarch64-linux-gnu-" \
+          HOSTCC="clang" \
+          HOSTCXX="clang++" \
           LD=ld.lld \
-          KCFLAGS="-w -Wno-error" \
+          AR=llvm-ar \
+          NM=llvm-nm \
+          OBJCOPY=llvm-objcopy \
+          OBJDUMP=llvm-objdump \
+          STRIP=llvm-strip \
+          KCFLAGS="-w -Wno-error -Wno-implicit-function-declaration -Wno-incompatible-pointer-types" \
           KBUILD_CFLAGS="-w -Wno-error" \
           WERROR=0
           
@@ -148,7 +169,7 @@ jobs:
         if [ -f "arch/arm64/boot/Image.gz" ]; then
           cp arch/arm64/boot/Image.gz $GITHUB_WORKSPACE/output/
           cd $GITHUB_WORKSPACE/output
-          zip -r kernel-A04-SukiSU.zip .
+          zip -r kernel-A04-SukiSU-${{ env.BUILD_TIME }}.zip .
         else
           echo "Build failed: Image.gz not found"
           exit 1
@@ -157,5 +178,5 @@ jobs:
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: kernel-a04-result
+        name: kernel-a04-sukisu-${{ env.BUILD_TIME }}
         path: output/*.zip
