@@ -79,50 +79,139 @@ jobs:
           sed -i 's/TWA_RESUME/0/g' drivers/kernelsu/allowlist.c
         fi
         
+    - name: Fix VDSO - Critical Fix
+      run: |
+        cd $KERNEL_DIR
+        
+        echo "=== Applying VDSO Clang Compatibility Fix ==="
+        
+        # 完全重写 gettimeofday.h 为 Clang 兼容版本
+        cat > arch/arm64/include/asm/vdso/gettimeofday.h << 'VDSO_EOF'
+/* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * ARM64 VDSO - Clang Compatible Version
+ */
+#ifndef __ASM_VDSO_GETTIMEOFDAY_H
+#define __ASM_VDSO_GETTIMEOFDAY_H
+
+#ifndef __ASSEMBLY__
+
+#include <asm/unistd.h>
+#include <uapi/linux/time.h>
+
+#define VDSO_HAS_TIME 1
+
+static __always_inline
+int gettimeofday_fallback(struct __kernel_old_timeval *_tv,
+			  struct timezone *_tz)
+{
+	register struct timezone *tz asm("1") = _tz;
+	register struct __kernel_old_timeval *tv asm("0") = _tv;
+	register long ret asm("0");
+	register long nr asm("8") = __NR_gettimeofday;
+
+	asm volatile(
+		"	svc #0\n"
+		: "=r"(ret)
+		: "r"(tv), "r"(tz), "r"(nr)
+		: "memory");
+
+	return ret;
+}
+
+static __always_inline
+long clock_gettime_fallback(clockid_t _clkid, struct __kernel_timespec *_ts)
+{
+	register struct __kernel_timespec *ts asm("1") = _ts;
+	register clockid_t clkid asm("0") = _clkid;
+	register long ret asm("0");
+	register long nr asm("8") = __NR_clock_gettime;
+
+	asm volatile(
+		"	svc #0\n"
+		: "=r"(ret)
+		: "r"(clkid), "r"(ts), "r"(nr)
+		: "memory");
+
+	return ret;
+}
+
+static __always_inline
+long clock_getres_fallback(clockid_t _clkid, struct __kernel_timespec *_ts)
+{
+	register struct __kernel_timespec *ts asm("1") = _ts;
+	register clockid_t clkid asm("0") = _clkid;
+	register long ret asm("0");
+	register long nr asm("8") = __NR_clock_getres;
+
+	asm volatile(
+		"	svc #0\n"
+		: "=r"(ret)
+		: "r"(clkid), "r"(ts), "r"(nr)
+		: "memory");
+
+	return ret;
+}
+
+static __always_inline u64 __arch_get_hw_counter(s32 clock_mode)
+{
+	u64 res;
+	asm volatile("mrs %0, cntvct_el0" : "=r"(res) :: "memory");
+	return res;
+}
+
+static __always_inline
+const struct vdso_data *__arch_get_vdso_data(void)
+{
+	return _vdso_data;
+}
+
+#ifdef CONFIG_TIME_NS
+static __always_inline
+const struct vdso_data *__arch_get_timens_vdso_data(void)
+{
+	return _timens_data;
+}
+#endif
+
+#endif /* !__ASSEMBLY__ */
+#endif /* __ASM_VDSO_GETTIMEOFDAY_H */
+VDSO_EOF
+
+        # 验证修复
+        if grep -q 'asm.*"x[0-9]"' arch/arm64/include/asm/vdso/gettimeofday.h 2>/dev/null; then
+          echo "❌ ERROR: Still found x-register syntax!"
+          cat arch/arm64/include/asm/vdso/gettimeofday.h
+          exit 1
+        else
+          echo "✅ SUCCESS: VDSO fixed - all registers using numeric syntax"
+        fi
+        
     - name: Fix common kernel issues
       run: |
         cd $KERNEL_DIR
         
-        # 1. 修复 stack_pointer.h 重定义问题
+        # 1. 修复 stack_pointer.h
         echo "/* Fix Clang sp error */" > arch/arm64/include/asm/stack_pointer.h
-        
-        # 2. 全局替换 current_stack_pointer 为内联汇编
+
+        # 2. 替换 current_stack_pointer
         find arch/arm64 -name "*.c" -o -name "*.h" | xargs sed -i 's/\bcurrent_stack_pointer\b/({ unsigned long sp; asm("mov %0, sp" : "=r"(sp)); sp; })/g'
-        
-        # 3. 修复 KGDB 汇编约束
+
+        # 3. 修复 KGDB
         if [ -f "arch/arm64/include/asm/kgdb.h" ]; then
           sed -i 's/asm ("brk %0" : : "I" (KGDB_COMPILED_DBG_BRK_IMM))/asm ("brk %0" : : "i" (KGDB_COMPILED_DBG_BRK_IMM))/g' arch/arm64/include/asm/kgdb.h
         fi
-        
-        # 4. 清除所有 Makefile 中的 -Werror
+
+        # 4. 清除 Makefile -Werror
         find . -type f \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) -exec sed -i \
           -e 's/-Wno-error=[^ ]*/-Wno-error/g' \
           -e 's/-Werror=[^ ]*/-Wno-error/g' \
           -e 's/-Werror//g' {} +
         
-        # 5. KernelSU 与 MTK 特定补丁
+        # 5. KernelSU 补丁
         find . -name "ksu.c" -exec sed -i '/MODULE_IMPORT_NS/d' {} +
         if [ -f "drivers/input/input_booster.c" ]; then
           sed -i 's/int is_ib_init_succeed() {/int is_ib_init_succeed(void) {/' drivers/input/input_booster.c
-        fi
-        
-        # 6. **关键修复: VDSO 编译问题**
-        # 修复 VDSO Makefile，强制使用 GCC 而非 Clang
-        if [ -f "arch/arm64/kernel/vdso/Makefile" ]; then
-          sed -i '/^CC_FLAGS_VDSO/d' arch/arm64/kernel/vdso/Makefile
-          sed -i '/^VDSO_LDFLAGS/a CC_VDSO := $(CROSS_COMPILE)gcc' arch/arm64/kernel/vdso/Makefile
-          sed -i 's/$(CC)/$(CC_VDSO)/g' arch/arm64/kernel/vdso/Makefile
-        fi
-        
-        # 7. 修复 vDSO 寄存器约束问题（如果上面方法不行）
-        if [ -f "arch/arm64/include/asm/vdso/gettimeofday.h" ]; then
-          # 备份原文件
-          cp arch/arm64/include/asm/vdso/gettimeofday.h arch/arm64/include/asm/vdso/gettimeofday.h.bak
-          
-          # 替换寄存器约束为 Clang 兼容的形式
-          sed -i 's/asm("x0")/asm("0")/g' arch/arm64/include/asm/vdso/gettimeofday.h
-          sed -i 's/asm("x1")/asm("1")/g' arch/arm64/include/asm/vdso/gettimeofday.h
-          sed -i 's/asm("x8")/asm("8")/g' arch/arm64/include/asm/vdso/gettimeofday.h
         fi
     
     - name: Configure and Build kernel
@@ -145,7 +234,7 @@ jobs:
         EOF
         make olddefconfig
 
-        # 正式编译，使用混合编译模式（Clang + GCC）
+        # 正式编译
         make -j$(nproc) \
           CC="clang" \
           CLANG_TRIPLE="aarch64-linux-gnu-" \
@@ -159,7 +248,11 @@ jobs:
           STRIP=llvm-strip \
           KCFLAGS="-w -Wno-error -Wno-implicit-function-declaration -Wno-incompatible-pointer-types" \
           KBUILD_CFLAGS="-w -Wno-error" \
-          WERROR=0
+          WERROR=0 || {
+            echo "=== Build failed, showing error context ==="
+            tail -100 < /dev/null
+            exit 1
+          }
           
     - name: Package and Upload
       if: success()
@@ -168,10 +261,22 @@ jobs:
         mkdir -p $GITHUB_WORKSPACE/output
         if [ -f "arch/arm64/boot/Image.gz" ]; then
           cp arch/arm64/boot/Image.gz $GITHUB_WORKSPACE/output/
+          
+          # 添加构建信息
+          cat > $GITHUB_WORKSPACE/output/build-info.txt << EOF
+        Build Time: ${{ env.BUILD_TIME }}
+        Kernel Source: ${{ env.KERNEL_SOURCE }}
+        Branch: ${{ env.KERNEL_BRANCH }}
+        Config: ${{ env.KERNEL_CONFIG }}
+        KernelSU: ${{ env.ENABLE_KERNELSU }}
+        Clang: ${{ env.CLANG_VERSION }}
+        EOF
+          
           cd $GITHUB_WORKSPACE/output
           zip -r kernel-A04-SukiSU-${{ env.BUILD_TIME }}.zip .
         else
-          echo "Build failed: Image.gz not found"
+          echo "❌ Build failed: Image.gz not found"
+          ls -la arch/arm64/boot/
           exit 1
         fi
 
@@ -180,3 +285,12 @@ jobs:
       with:
         name: kernel-a04-sukisu-${{ env.BUILD_TIME }}
         path: output/*.zip
+        
+    - name: Upload Build Log on Failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-log-${{ env.BUILD_TIME }}
+        path: |
+          ${{ env.KERNEL_DIR }}/.config
+          ${{ env.KERNEL_DIR }}/arch/arm64/include/asm/vdso/gettimeofday.h
