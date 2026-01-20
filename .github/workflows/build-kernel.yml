@@ -7,25 +7,14 @@ on:
         description: 'Enable KernelSU'
         type: boolean
         default: true
-      use_kprobes:
-        description: 'Enable KPROBES/OverlayFS'
-        type: boolean
-        default: true
 
 env:
-  # --- 基础配置 ---
   KERNEL_SOURCE: https://github.com/rsuntkOrgs/kernel_samsung_wingtech
   KERNEL_BRANCH: android-4.19-stable
   KERNEL_CONFIG: rsuntk-a04_defconfig
-  
-  # --- 工具链配置 ---
-  # 使用 Google 官方 Clang (r450784e = Clang 14.0.6)
   CLANG_VERSION: r450784e
-  
-  # --- 构建参数 ---
   ARCH: arm64
   SUBARCH: arm64
-  # 自定义版本号后缀
   KBUILD_BUILD_USER: "SukiSU"
   KBUILD_BUILD_HOST: "GitHub-Actions"
 
@@ -39,10 +28,8 @@ jobs:
 
     - name: Cleanup Environment
       run: |
-        # 清理空间以防止构建失败
         sudo rm -rf /usr/share/dotnet
         sudo rm -rf /opt/ghc
-        sudo rm -rf "/usr/local/share/boost"
         sudo rm -rf "$AGENT_TOOLSDIRECTORY"
 
     - name: Install Dependencies
@@ -54,7 +41,6 @@ jobs:
           python3-pip u-boot-tools unzip wget xz-utils zip zlib1g-dev \
           gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
-        # 链接 python2
         sudo ln -sf /usr/bin/python2 /usr/bin/python
 
     - name: Setup Toolchains
@@ -62,20 +48,16 @@ jobs:
         mkdir -p toolchains
         cd toolchains
 
-        # 1. 下载 Clang
-        echo "Downloading Clang..."
+        # 下载 Clang
         wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master-kernel-build-2022/clang-${CLANG_VERSION}.tar.gz
         mkdir clang
         tar -xf clang-${CLANG_VERSION}.tar.gz -C clang
 
-        # 2. 下载 GCC 64 (作为辅助交叉编译器)
-        echo "Downloading GCC 64..."
+        # 下载 GCC (辅助)
         wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz -O gcc64.tar.gz
         mkdir gcc64
         tar -xf gcc64.tar.gz -C gcc64
 
-        # 3. 下载 GCC 32
-        echo "Downloading GCC 32..."
         wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz -O gcc32.tar.gz
         mkdir gcc32
         tar -xf gcc32.tar.gz -C gcc32
@@ -88,68 +70,55 @@ jobs:
       if: inputs.enable_kernelsu == true
       run: |
         cd android-kernel
-        echo "Installing KernelSU..."
         curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
-        
-        # 常见修复：KSU 允许列表
         if [ -f "drivers/kernelsu/allowlist.c" ]; then
             sed -i 's/TWA_RESUME/0/g' drivers/kernelsu/allowlist.c
         fi
 
-    - name: Fix Kernel Issues (Crucial Step)
+    - name: Fix Kernel Issues (Fixing =return-type)
       run: |
         cd android-kernel
         
-        echo "=== Applying VDSO and Clang Fixes ==="
+        echo "=== Fixing Clang/Makefile Issues ==="
 
-        # 1. 修复 VDSO: Target does not support the tiny CodeModel
-        # 方法：从 VDSO Makefile 中删除 -mcmodel=tiny
+        # 1. 关键修复：解决 '=return-type' 报错
+        # 逻辑：将所有 Makefile 中的 -Werror 替换为 -Wno-error
+        # 这样 -Werror=return-type 会变成 -Wno-error=return-type (这是合法的)
+        find . -name "Makefile" -exec sed -i 's/-Werror/-Wno-error/g' {} +
+        find . -name "Kconfig" -exec sed -i 's/-Werror/-Wno-error/g' {} +
+
+        # 2. 修复 VDSO (Target does not support the tiny CodeModel)
         sed -i 's/-mcmodel=tiny//g' arch/arm64/kernel/vdso/Makefile
         
-        # 2. 修复 VDSO: unknown target ABI 'lp64'
-        # 方法：确保 VDSO 编译时带上 target flag
-        # 注意：这里我们强制在 VDSO 的 cflags 中加入 target
+        # 3. 修复 VDSO (unknown target ABI 'lp64')
         sed -i 's/ccflags-y := -shared/ccflags-y := -shared --target=aarch64-linux-gnu/g' arch/arm64/kernel/vdso/Makefile
-        
-        # 3. 修复常见的 Clang 栈保护错误
-        sed -i 's/-Werror-implicit-function-declaration/-Wno-error-implicit-function-declaration/g' Makefile
-        
-        # 4. 修复 scripts/dtc (如果用 python3 可能会报错)
-        sed -i 's/yaml_load(f)/yaml_load(f, Loader=yaml.SafeLoader)/g' scripts/dtc/dtc-lexer.l || true
 
-        # 5. 屏蔽无用的警告导致的错误
-        sed -i 's/-Werror//g' Makefile
-        sed -i 's/-Werror//g' arch/arm64/Makefile
+        # 4. 修复 scripts/dtc Python 兼容性
+        sed -i 's/yaml_load(f)/yaml_load(f, Loader=yaml.SafeLoader)/g' scripts/dtc/dtc-lexer.l || true
+        
+        # 5. 确保 KBUILD_CFLAGS 中没有残留的奇怪字符
+        # 有时候其他脚本会把 =return-type 硬写进去，这里再次保险清理
+        sed -i 's/=return-type//g' Makefile
 
     - name: Configure Kernel
       run: |
         cd android-kernel
-        
-        # 设置路径
         export PATH=$GITHUB_WORKSPACE/toolchains/clang/bin:$PATH
         
-        # 生成 defconfig
         make O=out ARCH=arm64 ${KERNEL_CONFIG}
 
-        # 开启 KernelSU 和其他必要配置
         if [ "${{ inputs.enable_kernelsu }}" == "true" ]; then
             ./scripts/config --file out/.config --enable CONFIG_KSU
             ./scripts/config --file out/.config --enable CONFIG_KPROBES
-            ./scripts/config --file out/.config --enable CONFIG_HAVE_KPROBES
-            ./scripts/config --file out/.config --enable CONFIG_KKPROBES
             ./scripts/config --file out/.config --enable CONFIG_OVERLAY_FS
         fi
         
-        # 修复旧配置
         make O=out ARCH=arm64 olddefconfig
 
     - name: Build Kernel
       run: |
         cd android-kernel
         export PATH=$GITHUB_WORKSPACE/toolchains/clang/bin:$PATH
-        
-        # 定义交叉编译变量
-        # 关键点：CLANG_TRIPLE 必须准确，CROSS_COMPILE 指向 GCC 用于辅助
         
         make -j$(nproc --all) O=out \
           ARCH=arm64 \
@@ -168,15 +137,11 @@ jobs:
     - name: Package Kernel
       run: |
         cd android-kernel
-        
         if [ -f out/arch/arm64/boot/Image.gz ]; then
             echo "Build Success!"
             mkdir -p upload
             cp out/arch/arm64/boot/Image.gz upload/Image.gz
-            
-            # 如果有 dtb 也复制出来 (Samsung A04 有时需要)
             find out/arch/arm64/boot/dts -name "*.dtb" -exec cp {} upload/ \; || true
-            
             cd upload
             zip -r ../kernel-A04-SukiSU-Ultra.zip .
         else
