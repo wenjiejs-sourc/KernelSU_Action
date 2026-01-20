@@ -47,13 +47,11 @@ jobs:
       run: |
         mkdir -p toolchains
         cd toolchains
-
-        # 下载 Clang
+        
         wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master-kernel-build-2022/clang-${CLANG_VERSION}.tar.gz
         mkdir clang
         tar -xf clang-${CLANG_VERSION}.tar.gz -C clang
 
-        # 下载 GCC (辅助)
         wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz -O gcc64.tar.gz
         mkdir gcc64
         tar -xf gcc64.tar.gz -C gcc64
@@ -71,34 +69,41 @@ jobs:
       run: |
         cd android-kernel
         curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
+        
+        # 修复1：允许列表
         if [ -f "drivers/kernelsu/allowlist.c" ]; then
             sed -i 's/TWA_RESUME/0/g' drivers/kernelsu/allowlist.c
         fi
+        
+        # 修复2：解决本次报错 MODULE_IMPORT_NS
+        # 这是一个针对 GKI 内核的宏，4.19 不支持，必须删除
+        echo "Removing MODULE_IMPORT_NS from ksu.c..."
+        sed -i '/MODULE_IMPORT_NS/d' drivers/kernelsu/ksu.c
 
-    - name: Fix Kernel Issues (Fixing =return-type)
+    - name: Fix Kernel Issues
       run: |
         cd android-kernel
         
-        echo "=== Fixing Clang/Makefile Issues ==="
+        echo "=== Applying Comprehensive Fixes ==="
 
-        # 1. 关键修复：解决 '=return-type' 报错
-        # 逻辑：将所有 Makefile 中的 -Werror 替换为 -Wno-error
-        # 这样 -Werror=return-type 会变成 -Wno-error=return-type (这是合法的)
+        # 1. 解决 '=return-type' 错误
         find . -name "Makefile" -exec sed -i 's/-Werror/-Wno-error/g' {} +
         find . -name "Kconfig" -exec sed -i 's/-Werror/-Wno-error/g' {} +
 
-        # 2. 修复 VDSO (Target does not support the tiny CodeModel)
+        # 2. 解决 VDSO 编译错误
         sed -i 's/-mcmodel=tiny//g' arch/arm64/kernel/vdso/Makefile
-        
-        # 3. 修复 VDSO (unknown target ABI 'lp64')
         sed -i 's/ccflags-y := -shared/ccflags-y := -shared --target=aarch64-linux-gnu/g' arch/arm64/kernel/vdso/Makefile
-
-        # 4. 修复 scripts/dtc Python 兼容性
+        
+        # 3. 解决 Python 兼容性
         sed -i 's/yaml_load(f)/yaml_load(f, Loader=yaml.SafeLoader)/g' scripts/dtc/dtc-lexer.l || true
         
-        # 5. 确保 KBUILD_CFLAGS 中没有残留的奇怪字符
-        # 有时候其他脚本会把 =return-type 硬写进去，这里再次保险清理
-        sed -i 's/=return-type//g' Makefile
+        # 4. 再次保险：清理可能残留的 MODULE_IMPORT_NS（如果用的是旧版KSU文件结构）
+        find . -name "ksu.c" -exec sed -i '/MODULE_IMPORT_NS/d' {} +
+        
+        # 5. 清理 Clang 不支持的 GCC 参数 (消除烦人的 warning)
+        # 这些参数在 Clang 下是无效的，虽然不报错，但看着很难受
+        find . -name "Makefile" -exec sed -i 's/-fmerge-constants//g' {} +
+        find . -name "Makefile" -exec sed -i 's/--param=allow-store-data-races=0//g' {} +
 
     - name: Configure Kernel
       run: |
