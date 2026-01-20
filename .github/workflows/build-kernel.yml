@@ -70,21 +70,25 @@ jobs:
         cd android-kernel
         curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
         
-        # --- KSU 修复补丁集 ---
+        # --- KernelSU 4.19 兼容性修复合集 ---
         
-        # 1. 修复 Allowlist 警告/错误
+        # 1. [常规] 修复 Allowlist 警告
         if [ -f "drivers/kernelsu/allowlist.c" ]; then
             sed -i 's/TWA_RESUME/0/g' drivers/kernelsu/allowlist.c
         fi
         
-        # 2. 修复 GKI 宏缺失 (MODULE_IMPORT_NS)
-        echo "Fixing MODULE_IMPORT_NS..."
+        # 2. [GKI] 删除 MODULE_IMPORT_NS (4.19不支持)
         sed -i '/MODULE_IMPORT_NS/d' drivers/kernelsu/ksu.c
         
-        # 3. [关键修复] 修复 struct seccomp 缺少 filter_count 成员
-        # 我们直接删除引用该成员的代码行
-        echo "Fixing seccomp.filter_count error..."
+        # 3. [Struct] 删除 seccomp.filter_count (旧内核结构体缺失)
         sed -i '/filter_count/d' drivers/kernelsu/app_profile.c
+
+        # 4. [NEW][Header] 修复 pgtable.h 缺失 (关键修复)
+        # 将 <linux/pgtable.h> 替换为 <linux/mm.h>
+        if [ -f "drivers/kernelsu/sucompat.c" ]; then
+            echo "Fixing sucompat.c header include..."
+            sed -i 's/<linux\/pgtable.h>/<linux\/mm.h>/g' drivers/kernelsu/sucompat.c
+        fi
 
     - name: Fix Kernel Issues
       run: |
@@ -92,21 +96,18 @@ jobs:
         
         echo "=== Applying General Kernel Fixes ==="
 
-        # 1. 全局替换 -Werror 为 -Wno-error (包括 =return-type 修复)
+        # 1. 忽略警告 (-Werror -> -Wno-error)
         find . -name "Makefile" -exec sed -i 's/-Werror/-Wno-error/g' {} +
         find . -name "Kconfig" -exec sed -i 's/-Werror/-Wno-error/g' {} +
 
-        # 2. VDSO 修复 (CodeModel & Target Triple)
+        # 2. VDSO 修复
         sed -i 's/-mcmodel=tiny//g' arch/arm64/kernel/vdso/Makefile
         sed -i 's/ccflags-y := -shared/ccflags-y := -shared --target=aarch64-linux-gnu/g' arch/arm64/kernel/vdso/Makefile
         
-        # 3. Python 兼容性
+        # 3. Python 修复
         sed -i 's/yaml_load(f)/yaml_load(f, Loader=yaml.SafeLoader)/g' scripts/dtc/dtc-lexer.l || true
         
-        # 4. 再次清理 KernelSU 残留 (防止脚本重跑时的遗漏)
-        find . -name "ksu.c" -exec sed -i '/MODULE_IMPORT_NS/d' {} +
-        
-        # 5. 清理 Clang 无法识别的 GCC 参数
+        # 4. 清理无效参数
         find . -name "Makefile" -exec sed -i 's/-fmerge-constants//g' {} +
         find . -name "Makefile" -exec sed -i 's/--param=allow-store-data-races=0//g' {} +
 
@@ -122,8 +123,8 @@ jobs:
             ./scripts/config --file out/.config --enable CONFIG_KPROBES
             ./scripts/config --file out/.config --enable CONFIG_OVERLAY_FS
             
-            # 尝试开启 Seccomp 以防万一 (虽然我们已经删除了依赖代码)
-            ./scripts/config --file out/.config --enable CONFIG_SECCOMP
+            # 这里的 SECCOMP 如果开启报错，可以注释掉
+            # ./scripts/config --file out/.config --enable CONFIG_SECCOMP
         fi
         
         make O=out ARCH=arm64 olddefconfig
