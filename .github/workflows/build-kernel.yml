@@ -88,11 +88,16 @@ jobs:
             sed -i 's/<linux\/pgtable.h>/<linux\/mm.h>/g' drivers/kernelsu/sucompat.c
         fi
         
-        # 5. [NEW][API] 修复 fsnotify API 变更
-        # error: field designator 'handle_inode_event' does not refer to any field...
+        # 5. [API] 修复 fsnotify API (handle_inode_event -> handle_event)
         if [ -f "drivers/kernelsu/pkg_observer.c" ]; then
-            echo "Fixing pkg_observer.c fsnotify API..."
             sed -i 's/handle_inode_event/handle_event/g' drivers/kernelsu/pkg_observer.c
+        fi
+
+        # 6. [NEW][API] 修复 force_sig 参数过少
+        # error: too few arguments to function call, expected 2, have 1
+        if [ -f "drivers/kernelsu/setuid_hook.c" ]; then
+            echo "Fixing force_sig arguments in setuid_hook.c..."
+            sed -i 's/force_sig(SIGKILL)/force_sig(SIGKILL, current)/g' drivers/kernelsu/setuid_hook.c
         fi
 
     - name: Fix Kernel Issues
@@ -116,7 +121,7 @@ jobs:
         find . -name "Makefile" -exec sed -i 's/-fmerge-constants//g' {} +
         find . -name "Makefile" -exec sed -i 's/--param=allow-store-data-races=0//g' {} +
         
-        # 5. 二次清理 KSU 残留 (防止脚本重跑)
+        # 5. 二次清理 KSU 残留 (保险起见)
         find . -name "ksu.c" -exec sed -i '/MODULE_IMPORT_NS/d' {} +
 
     - name: Configure Kernel
@@ -130,9 +135,6 @@ jobs:
             ./scripts/config --file out/.config --enable CONFIG_KSU
             ./scripts/config --file out/.config --enable CONFIG_KPROBES
             ./scripts/config --file out/.config --enable CONFIG_OVERLAY_FS
-            
-            # 建议：如果不需要 App Profile 的复杂隔离，可以不启用 CONFIG_SECCOMP
-            # ./scripts/config --file out/.config --enable CONFIG_SECCOMP
         fi
         
         make O=out ARCH=arm64 olddefconfig
