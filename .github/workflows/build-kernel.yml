@@ -259,11 +259,16 @@ jobs:
           cd android-kernel
           export PATH="$GITHUB_WORKSPACE/toolchains/clang/bin:$PATH"
 
+          TOOL_CC="clang"
+          if [ "${ENABLE_CCACHE}" = "true" ]; then
+            TOOL_CC="ccache clang"
+          fi
+
           MAKE_ARGS=(
             -j"$(nproc --all)"
             O=out
             ARCH="${ARCH}"
-            CC=clang
+            CC=${TOOL_CC}
             CLANG_TRIPLE=aarch64-linux-gnu-
             LD=ld.lld
             AR=llvm-ar
@@ -279,10 +284,6 @@ jobs:
 
           if [ "${ENABLE_GCC_32}" = "true" ]; then
             MAKE_ARGS+=(CROSS_COMPILE_ARM32="$GITHUB_WORKSPACE/toolchains/gcc32/bin/arm-linux-androideabi-")
-          fi
-
-          if [ "${ENABLE_CCACHE}" = "true" ]; then
-            MAKE_ARGS+=(CC="ccache clang")
           fi
 
           if [ "${VERBOSE_BUILD}" = "true" ]; then
