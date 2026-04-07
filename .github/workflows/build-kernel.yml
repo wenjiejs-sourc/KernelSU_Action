@@ -21,10 +21,6 @@ jobs:
           set -euo pipefail
           test -f config.env
 
-          echo "===== config.env ====="
-          cat config.env
-          echo "======================"
-
           set -a
           source config.env
           set +a
@@ -36,25 +32,6 @@ jobs:
           : "${ARCH:?ARCH is missing}"
           : "${CLANG_BRANCH:?CLANG_BRANCH is missing}"
           : "${CLANG_VERSION:?CLANG_VERSION is missing}"
-          : "${ENABLE_GCC_64:?ENABLE_GCC_64 is missing}"
-          : "${ENABLE_GCC_32:?ENABLE_GCC_32 is missing}"
-          : "${ROOT_SOLUTION:?ROOT_SOLUTION is missing}"
-          : "${SUKISU_VARIANT:?SUKISU_VARIANT is missing}"
-          : "${ADD_KSU_CONFIG:?ADD_KSU_CONFIG is missing}"
-          : "${ADD_KPROBES_CONFIG:?ADD_KPROBES_CONFIG is missing}"
-          : "${ADD_OVERLAYFS_CONFIG:?ADD_OVERLAYFS_CONFIG is missing}"
-          : "${ADD_KALLSYMS_CONFIG:?ADD_KALLSYMS_CONFIG is missing}"
-          : "${ADD_KPM_CONFIG:?ADD_KPM_CONFIG is missing}"
-          : "${DISABLE_LTO:?DISABLE_LTO is missing}"
-          : "${DISABLE_CC_WERROR:?DISABLE_CC_WERROR is missing}"
-          : "${REMOVE_INVALID_FLAGS:?REMOVE_INVALID_FLAGS is missing}"
-          : "${FIX_VDSO_CLANG:?FIX_VDSO_CLANG is missing}"
-          : "${PYTHON_SAFELOADER_FIX:?PYTHON_SAFELOADER_FIX is missing}"
-          : "${ENABLE_CCACHE:?ENABLE_CCACHE is missing}"
-          : "${REMOVE_UNUSED_PACKAGES:?REMOVE_UNUSED_PACKAGES is missing}"
-          : "${BUILD_BOOT_IMG:?BUILD_BOOT_IMG is missing}"
-          : "${VERBOSE_BUILD:?VERBOSE_BUILD is missing}"
-          : "${KEEP_BUILD_LOG:?KEEP_BUILD_LOG is missing}"
 
           {
             echo "KERNEL_SOURCE=$KERNEL_SOURCE"
@@ -85,46 +62,17 @@ jobs:
             echo "KEEP_BUILD_LOG=$KEEP_BUILD_LOG"
           } >> "$GITHUB_ENV"
 
-      - name: Print build target
-        shell: bash
-        run: |
-          echo "KERNEL_SOURCE=$KERNEL_SOURCE"
-          echo "KERNEL_SOURCE_BRANCH=$KERNEL_SOURCE_BRANCH"
-          echo "KERNEL_CONFIG=$KERNEL_CONFIG"
-          echo "KERNEL_IMAGE_NAME=$KERNEL_IMAGE_NAME"
-          echo "ARCH=$ARCH"
-          echo "ROOT_SOLUTION=$ROOT_SOLUTION"
-          echo "SUKISU_VARIANT=$SUKISU_VARIANT"
-
-      - name: Cleanup environment
-        shell: bash
-        run: |
-          if [ "$REMOVE_UNUSED_PACKAGES" = "true" ]; then
-            sudo rm -rf /usr/share/dotnet || true
-            sudo rm -rf /opt/ghc || true
-            sudo rm -rf "$AGENT_TOOLSDIRECTORY" || true
-          fi
-
       - name: Install dependencies
         shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            bc bison build-essential ca-certificates ccache curl dos2unix file flex git gnupg \
+            bc bison build-essential ca-certificates curl dos2unix file flex git gnupg \
             libelf-dev libssl-dev libtinfo5 lz4 make perl python2 python3 python3-pip \
             u-boot-tools unzip wget xz-utils zip zlib1g-dev \
-            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+            gcc g++ gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
           sudo ln -sf /usr/bin/python2 /usr/bin/python || true
-
-      - name: Setup ccache
-        if: env.ENABLE_CCACHE == 'true'
-        shell: bash
-        run: |
-          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
-          echo "CCACHE_MAXSIZE=2G" >> "$GITHUB_ENV"
-          ccache -M 2G || true
-          ccache --version || true
 
       - name: Setup toolchains
         shell: bash
@@ -149,64 +97,54 @@ jobs:
             tar -xf gcc32.tar.gz -C gcc32
           fi
 
-      - name: Debug toolchain paths
-        shell: bash
-        run: |
-          ls -lah "$GITHUB_WORKSPACE/toolchains" || true
-          ls -lah "$GITHUB_WORKSPACE/toolchains/clang/bin" || true
-          ls -lah "$GITHUB_WORKSPACE/toolchains/gcc64/bin" || true
-          ls -lah "$GITHUB_WORKSPACE/toolchains/gcc32/bin" || true
-
       - name: Clone kernel source
         shell: bash
         run: |
           set -euo pipefail
           git clone --depth=1 -b "${KERNEL_SOURCE_BRANCH}" "${KERNEL_SOURCE}" android-kernel
 
-      - name: Show kernel source info
-        shell: bash
-        run: |
-          cd android-kernel
-          git rev-parse --short HEAD || true
-          git branch || true
-          ls arch/arm64/configs | grep -i "$(echo "$KERNEL_CONFIG" | sed 's/_defconfig$//')" || true
-
-      - name: Sanitize kernel tree text files
+      - name: Aggressive sanitize source tree
         shell: bash
         run: |
           set -euo pipefail
           cd android-kernel
 
-          # 统一转 LF
-          find . \( -name "Kconfig" -o -name "Kconfig.*" -o -name "Makefile" -o -name "*.mk" -o -name "*defconfig" \) \
+          # 统一文本格式
+          find . \( -name "Kconfig" -o -name "Kconfig.*" -o -name "Makefile" -o -name "Kbuild" -o -name "*.mk" -o -name "*defconfig" \) \
             -type f -exec dos2unix {} \; || true
 
           # 去 BOM / 去 CR
-          find . \( -name "Kconfig" -o -name "Kconfig.*" -o -name "Makefile" -o -name "*.mk" -o -name "*defconfig" \) \
+          find . \( -name "Kconfig" -o -name "Kconfig.*" -o -name "Makefile" -o -name "Kbuild" -o -name "*.mk" -o -name "*defconfig" \) \
             -type f -print0 | while IFS= read -r -d '' f; do
               sed -i '1s/^\xEF\xBB\xBF//' "$f" || true
               sed -i 's/\r$//' "$f" || true
             done
 
-          # Kconfig 常见脏内容修复：
-          # 1. 删掉只有单引号的脏行
-          # 2. 删掉 patch 残留的行首 '+'
-          find . \( -name "Kconfig" -o -name "Kconfig.*" \) -type f -print0 | while IFS= read -r -d '' f; do
-            perl -0pi -e "s/^\s*'\s*\n//mg" "$f" || true
-            perl -0pi -e 's/^\+//mg' "$f" || true
-          done
+          # 清掉 patch 残留
+          find . \( -name "Kconfig" -o -name "Kconfig.*" -o -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) \
+            -type f -print0 | while IFS= read -r -d '' f; do
+              perl -0pi -e 's/^\+\+\+.*\n//mg' "$f" || true
+              perl -0pi -e 's/^---.*\n//mg' "$f" || true
+              perl -0pi -e 's/^@@.*\n//mg' "$f" || true
+              perl -0pi -e 's/^\+//mg' "$f" || true
+              perl -0pi -e "s/^\s*'\s*\n//mg" "$f" || true
+            done
+
+          # 清掉可疑 standalone true
+          find . \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) \
+            -type f -print0 | while IFS= read -r -d '' f; do
+              perl -0pi -e 's/^\s*true\s*$//mg' "$f" || true
+            done
+
+          # 打印可疑位置
+          echo "===== grep suspicious true ====="
+          grep -RIn --include='Makefile' --include='Kbuild' --include='*.mk' '\<true\>' . || true
+
+          echo "===== grep suspicious plus lines ====="
+          grep -RIn --include='Kconfig' --include='Kconfig.*' --include='Makefile' --include='Kbuild' --include='*.mk' '^[+]' . || true
 
           echo "===== init/Kconfig ====="
           cat -A init/Kconfig | sed -n '1,40p' || true
-
-          echo "===== drivers/input/hx9031a_sar/Kconfig ====="
-          cat -A drivers/input/hx9031a_sar/Kconfig | sed -n '1,40p' || true
-
-          echo "===== drivers/misc/mediatek/typec/tcpc/aw35615/Kconfig ====="
-          cat -A drivers/misc/mediatek/typec/tcpc/aw35615/Kconfig | sed -n '1,40p' || true
-
-          echo "===== drivers/input/touchscreen/mediatek/hxchipset_hx83108x/Kconfig ====="
-          cat -A drivers/input/touchscreen/mediatek/hxchipset_hx83108x/Kconfig | sed -n '1,80p' || true
 
       - name: Integrate SukiSU-Ultra
         shell: bash
@@ -256,25 +194,25 @@ jobs:
           make O=out ARCH="${ARCH}" "${KERNEL_CONFIG}"
 
           if [ "$ADD_KSU_CONFIG" = "true" ]; then
-            ./scripts/config --file out/.config --enable CONFIG_KSU || true
+            ./scripts/config --file out/.config --enable KSU || true
           fi
 
           if [ "$ADD_KPROBES_CONFIG" = "true" ]; then
-            ./scripts/config --file out/.config --enable CONFIG_KPROBES || true
-            ./scripts/config --file out/.config --enable CONFIG_KRETPROBES || true
+            ./scripts/config --file out/.config --enable KPROBES || true
+            ./scripts/config --file out/.config --enable KRETPROBES || true
           fi
 
           if [ "$ADD_OVERLAYFS_CONFIG" = "true" ]; then
-            ./scripts/config --file out/.config --enable CONFIG_OVERLAY_FS || true
+            ./scripts/config --file out/.config --enable OVERLAY_FS || true
           fi
 
           if [ "$ADD_KALLSYMS_CONFIG" = "true" ]; then
-            ./scripts/config --file out/.config --enable CONFIG_KALLSYMS || true
-            ./scripts/config --file out/.config --enable CONFIG_KALLSYMS_ALL || true
+            ./scripts/config --file out/.config --enable KALLSYMS || true
+            ./scripts/config --file out/.config --enable KALLSYMS_ALL || true
           fi
 
           if [ "$ADD_KPM_CONFIG" = "true" ]; then
-            ./scripts/config --file out/.config --enable CONFIG_KPM || true
+            ./scripts/config --file out/.config --enable KPM || true
           fi
 
           if [ "$DISABLE_LTO" = "true" ]; then
@@ -286,9 +224,6 @@ jobs:
 
           make O=out ARCH="${ARCH}" olddefconfig
 
-          echo "===== Final Config Check ====="
-          grep -E "CONFIG_KSU|CONFIG_KPROBES|CONFIG_KRETPROBES|CONFIG_OVERLAY_FS|CONFIG_KALLSYMS|CONFIG_KALLSYMS_ALL|CONFIG_KPM" out/.config || true
-
       - name: Build kernel
         shell: bash
         run: |
@@ -296,16 +231,13 @@ jobs:
           cd android-kernel
           export PATH="$GITHUB_WORKSPACE/toolchains/clang/bin:$PATH"
 
-          TOOL_CC="clang"
-          if [ "${ENABLE_CCACHE}" = "true" ]; then
-            TOOL_CC="ccache clang"
-          fi
-
           MAKE_ARGS=(
             "-j$(nproc --all)"
             "O=out"
             "ARCH=${ARCH}"
-            "CC=${TOOL_CC}"
+            "CC=clang"
+            "HOSTCC=gcc"
+            "HOSTCXX=g++"
             "CLANG_TRIPLE=aarch64-linux-gnu-"
             "LD=ld.lld"
             "AR=llvm-ar"
@@ -313,6 +245,15 @@ jobs:
             "OBJCOPY=llvm-objcopy"
             "OBJDUMP=llvm-objdump"
             "STRIP=llvm-strip"
+            "LLVM=1"
+            "LLVM_IAS=1"
+            "KCFLAGS="
+            "KCPPFLAGS="
+            "CFLAGS_KERNEL="
+            "CFLAGS_MODULE="
+            "HOSTCFLAGS="
+            "HOSTLDFLAGS="
+            "V=1"
           )
 
           if [ "${ENABLE_GCC_64}" = "true" ]; then
@@ -321,10 +262,6 @@ jobs:
 
           if [ "${ENABLE_GCC_32}" = "true" ]; then
             MAKE_ARGS+=("CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/toolchains/gcc32/bin/arm-linux-androideabi-")
-          fi
-
-          if [ "${VERBOSE_BUILD}" = "true" ]; then
-            MAKE_ARGS+=("V=1")
           fi
 
           printf 'MAKE_ARGS:\n'
@@ -345,14 +282,10 @@ jobs:
           set -euo pipefail
           cd android-kernel
 
-          if [ ! -f "out/arch/arm64/boot/${KERNEL_IMAGE_NAME}" ]; then
-            echo "Build failed: ${KERNEL_IMAGE_NAME} not found"
-            exit 1
-          fi
+          test -f "out/arch/arm64/boot/${KERNEL_IMAGE_NAME}"
 
           mkdir -p upload
           cp "out/arch/arm64/boot/${KERNEL_IMAGE_NAME}" "upload/${KERNEL_IMAGE_NAME}"
-
           find out/arch/arm64/boot/dts -name "*.dtb" -exec cp {} upload/ \; || true
           find out/arch/arm64/boot/dts -name "*.dtbo" -exec cp {} upload/ \; || true
 
