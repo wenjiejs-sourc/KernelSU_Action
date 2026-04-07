@@ -20,6 +20,7 @@ jobs:
         run: |
           set -euo pipefail
           test -f config.env
+
           set -a
           source config.env
           set +a
@@ -53,15 +54,61 @@ jobs:
             echo "KEEP_BUILD_LOG=$KEEP_BUILD_LOG"
           } >> "$GITHUB_ENV"
 
+      - name: Print build target
+        shell: bash
+        run: |
+          echo "KERNEL_SOURCE=$KERNEL_SOURCE"
+          echo "KERNEL_SOURCE_BRANCH=$KERNEL_SOURCE_BRANCH"
+          echo "KERNEL_CONFIG=$KERNEL_CONFIG"
+          echo "KERNEL_IMAGE_NAME=$KERNEL_IMAGE_NAME"
+          echo "ARCH=$ARCH"
+          echo "ROOT_SOLUTION=$ROOT_SOLUTION"
+          echo "SUKISU_VARIANT=$SUKISU_VARIANT"
+
+      - name: Cleanup environment
+        shell: bash
+        run: |
+          if [ "$REMOVE_UNUSED_PACKAGES" = "true" ]; then
+            sudo rm -rf /usr/share/dotnet || true
+            sudo rm -rf /opt/ghc || true
+            sudo rm -rf "$AGENT_TOOLSDIRECTORY" || true
+          fi
+
       - name: Install dependencies
         shell: bash
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            bc bison build-essential ca-certificates curl dos2unix file flex git gnupg \
-            libelf-dev libssl-dev libtinfo5 lz4 make perl python2 python3 python3-pip \
-            u-boot-tools unzip wget xz-utils zip zlib1g-dev \
-            gcc g++ gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+            bc \
+            bison \
+            build-essential \
+            ca-certificates \
+            curl \
+            dos2unix \
+            file \
+            flex \
+            git \
+            gnupg \
+            libelf-dev \
+            libssl-dev \
+            libtinfo5 \
+            lz4 \
+            make \
+            perl \
+            python2 \
+            python3 \
+            python3-pip \
+            u-boot-tools \
+            unzip \
+            wget \
+            xz-utils \
+            zip \
+            zlib1g-dev \
+            gcc \
+            g++ \
+            gcc-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabi
+
           sudo ln -sf /usr/bin/python2 /usr/bin/python || true
 
       - name: Setup toolchains
@@ -87,6 +134,14 @@ jobs:
             tar -xf gcc32.tar.gz -C gcc32
           fi
 
+      - name: Debug toolchain paths
+        shell: bash
+        run: |
+          ls -lah "$GITHUB_WORKSPACE/toolchains" || true
+          ls -lah "$GITHUB_WORKSPACE/toolchains/clang/bin" || true
+          ls -lah "$GITHUB_WORKSPACE/toolchains/gcc64/bin" || true
+          ls -lah "$GITHUB_WORKSPACE/toolchains/gcc32/bin" || true
+
       - name: Clone kernel source
         shell: bash
         run: |
@@ -104,11 +159,18 @@ jobs:
           fi
 
           mkdir -p drivers/staging/speakup
-          cat > drivers/staging/speakup/Kconfig <<'EOF'
-menuconfig STAGING_SPEAKUP_DISABLED
-    bool "Disabled broken speakup staging config"
-    default n
-EOF
+
+          printf '%s\n' \
+            'menuconfig STAGING_SPEAKUP_DISABLED' \
+            '    bool "Disabled broken speakup staging config"' \
+            '    default n' \
+            > drivers/staging/speakup/Kconfig
+
+          echo "===== verify speakup source removed ====="
+          grep -n 'drivers/staging/speakup/Kconfig' drivers/staging/Kconfig || true
+
+          echo "===== replacement speakup Kconfig ====="
+          cat drivers/staging/speakup/Kconfig
 
       - name: Aggressive sanitize source tree
         shell: bash
@@ -116,16 +178,19 @@ EOF
           set -euo pipefail
           cd android-kernel
 
-          find . \( -name "Kconfig" -o -name "Kconfig.*" -o -name "Makefile" -o -name "Kbuild" -o -name "*.mk" -o -name "*defconfig" \) \
+          find . \
+            \( -name "Kconfig" -o -name "Kconfig.*" -o -name "Makefile" -o -name "Kbuild" -o -name "*.mk" -o -name "*defconfig" \) \
             -type f -exec dos2unix {} \; || true
 
-          find . \( -name "Kconfig" -o -name "Kconfig.*" -o -name "Makefile" -o -name "Kbuild" -o -name "*.mk" -o -name "*defconfig" \) \
+          find . \
+            \( -name "Kconfig" -o -name "Kconfig.*" -o -name "Makefile" -o -name "Kbuild" -o -name "*.mk" -o -name "*defconfig" \) \
             -type f -print0 | while IFS= read -r -d '' f; do
               sed -i '1s/^\xEF\xBB\xBF//' "$f" || true
               sed -i 's/\r$//' "$f" || true
             done
 
-          find . \( -name "Kconfig" -o -name "Kconfig.*" -o -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) \
+          find . \
+            \( -name "Kconfig" -o -name "Kconfig.*" -o -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) \
             -type f -print0 | while IFS= read -r -d '' f; do
               perl -0pi -e 's/^\+\+\+.*\n//mg' "$f" || true
               perl -0pi -e 's/^---.*\n//mg' "$f" || true
@@ -134,16 +199,34 @@ EOF
               perl -0pi -e "s/^\s*'\s*\n//mg" "$f" || true
             done
 
-          find . \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) \
+          find . \
+            \( -name "Makefile" -o -name "Kbuild" -o -name "*.mk" \) \
             -type f -print0 | while IFS= read -r -d '' f; do
               perl -0pi -e 's/^\s*true\s*$//mg' "$f" || true
             done
+
+          echo "===== suspicious true ====="
+          grep -RIn --include='Makefile' --include='Kbuild' --include='*.mk' '\<true\>' . || true
+
+      - name: Show kernel source info
+        shell: bash
+        run: |
+          cd android-kernel
+          git rev-parse --short HEAD || true
+          git branch || true
+          ls arch/arm64/configs | grep -i "$(echo "$KERNEL_CONFIG" | sed 's/_defconfig$//')" || true
 
       - name: Integrate SukiSU-Ultra
         shell: bash
         run: |
           set -euo pipefail
           cd android-kernel
+
+          if [ "${ROOT_SOLUTION}" != "sukisu-ultra" ]; then
+            echo "Unsupported ROOT_SOLUTION=${ROOT_SOLUTION}"
+            exit 1
+          fi
+
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s "${SUKISU_VARIANT}"
 
       - name: Apply general kernel fixes
@@ -183,20 +266,25 @@ EOF
           if [ "$ADD_KSU_CONFIG" = "true" ]; then
             ./scripts/config --file out/.config --enable KSU || true
           fi
+
           if [ "$ADD_KPROBES_CONFIG" = "true" ]; then
             ./scripts/config --file out/.config --enable KPROBES || true
             ./scripts/config --file out/.config --enable KRETPROBES || true
           fi
+
           if [ "$ADD_OVERLAYFS_CONFIG" = "true" ]; then
             ./scripts/config --file out/.config --enable OVERLAY_FS || true
           fi
+
           if [ "$ADD_KALLSYMS_CONFIG" = "true" ]; then
             ./scripts/config --file out/.config --enable KALLSYMS || true
             ./scripts/config --file out/.config --enable KALLSYMS_ALL || true
           fi
+
           if [ "$ADD_KPM_CONFIG" = "true" ]; then
             ./scripts/config --file out/.config --enable KPM || true
           fi
+
           if [ "$DISABLE_LTO" = "true" ]; then
             ./scripts/config --file out/.config --disable LTO || true
             ./scripts/config --file out/.config --disable LTO_CLANG || true
@@ -205,6 +293,9 @@ EOF
           fi
 
           make O=out ARCH="${ARCH}" olddefconfig
+
+          echo "===== Final Config Check ====="
+          grep -E "CONFIG_KSU|CONFIG_KPROBES|CONFIG_KRETPROBES|CONFIG_OVERLAY_FS|CONFIG_KALLSYMS|CONFIG_KALLSYMS_ALL|CONFIG_KPM" out/.config || true
 
       - name: Build kernel
         shell: bash
@@ -241,6 +332,7 @@ EOF
           if [ "${ENABLE_GCC_64}" = "true" ]; then
             MAKE_ARGS+=("CROSS_COMPILE=$GITHUB_WORKSPACE/toolchains/gcc64/bin/aarch64-linux-android-")
           fi
+
           if [ "${ENABLE_GCC_32}" = "true" ]; then
             MAKE_ARGS+=("CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/toolchains/gcc32/bin/arm-linux-androideabi-")
           fi
@@ -251,7 +343,7 @@ EOF
           make "${MAKE_ARGS[@]}" "${KERNEL_IMAGE_NAME}" 2>&1 | tee build.log
 
       - name: Save build log
-        if: always() && env.KEEP_BUILD_LOG == 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-log
@@ -262,7 +354,11 @@ EOF
         run: |
           set -euo pipefail
           cd android-kernel
-          test -f "out/arch/arm64/boot/${KERNEL_IMAGE_NAME}"
+
+          if [ ! -f "out/arch/arm64/boot/${KERNEL_IMAGE_NAME}" ]; then
+            echo "Build failed: ${KERNEL_IMAGE_NAME} not found"
+            exit 1
+          fi
 
           mkdir -p upload
           cp "out/arch/arm64/boot/${KERNEL_IMAGE_NAME}" "upload/${KERNEL_IMAGE_NAME}"
