@@ -313,6 +313,13 @@ jobs:
 
           make "${MAKE_ARGS[@]}" "${KERNEL_IMAGE_NAME}" 2>&1 | tee build.log
 
+      - name: Debug problematic Kconfig
+        shell: bash
+        run: |
+          cd android-kernel
+          echo "===== cat -A drivers/input/hx9031a_sar/Kconfig ====="
+          cat -A drivers/input/hx9031a_sar/Kconfig | sed -n '1,20p' || true
+
       - name: Save build log
         if: always() && env.KEEP_BUILD_LOG == 'true'
         uses: actions/upload-artifact@v4
