@@ -2,177 +2,248 @@ name: Build Samsung A04 Kernel (SukiSU-Ultra)
 
 on:
   workflow_dispatch:
-    inputs:
-      enable_kernelsu:
-        description: 'Enable KernelSU'
-        type: boolean
-        default: true
-
-env:
-  KERNEL_SOURCE: https://github.com/rsuntkOrgs/kernel_samsung_wingtech
-  KERNEL_BRANCH: android-4.19-stable
-  KERNEL_CONFIG: rsuntk-a04_defconfig
-  CLANG_VERSION: r450784e
-  ARCH: arm64
-  SUBARCH: arm64
-  KBUILD_BUILD_USER: "SukiSU"
-  KBUILD_BUILD_HOST: "GitHub-Actions"
 
 jobs:
   build:
     runs-on: ubuntu-22.04
 
+    env:
+      KBUILD_BUILD_USER: SukiSU
+      KBUILD_BUILD_HOST: GitHub-Actions
+
     steps:
-    - name: Checkout Workflow
-      uses: actions/checkout@v4
+      - name: Checkout workflow repo
+        uses: actions/checkout@v4
 
-    - name: Cleanup Environment
-      run: |
-        sudo rm -rf /usr/share/dotnet
-        sudo rm -rf /opt/ghc
-        sudo rm -rf "$AGENT_TOOLSDIRECTORY"
+      - name: Load config.env
+        shell: bash
+        run: |
+          set -a
+          source config.env
+          set +a
 
-    - name: Install Dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
-          bc bison build-essential ca-certificates ccache curl flex git gnupg \
-          libelf-dev libssl-dev libtinfo5 lz4 make python2 python3 \
-          python3-pip u-boot-tools unzip wget xz-utils zip zlib1g-dev \
-          gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
+          echo "KERNEL_SOURCE=$KERNEL_SOURCE" >> $GITHUB_ENV
+          echo "KERNEL_SOURCE_BRANCH=$KERNEL_SOURCE_BRANCH" >> $GITHUB_ENV
+          echo "KERNEL_CONFIG=$KERNEL_CONFIG" >> $GITHUB_ENV
+          echo "KERNEL_IMAGE_NAME=$KERNEL_IMAGE_NAME" >> $GITHUB_ENV
+          echo "ARCH=$ARCH" >> $GITHUB_ENV
 
-        sudo ln -sf /usr/bin/python2 /usr/bin/python
+          echo "CLANG_BRANCH=$CLANG_BRANCH" >> $GITHUB_ENV
+          echo "CLANG_VERSION=$CLANG_VERSION" >> $GITHUB_ENV
 
-    - name: Setup Toolchains
-      run: |
-        mkdir -p toolchains
-        cd toolchains
-        
-        wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master-kernel-build-2022/clang-${CLANG_VERSION}.tar.gz
-        mkdir clang
-        tar -xf clang-${CLANG_VERSION}.tar.gz -C clang
+          echo "ENABLE_GCC_64=$ENABLE_GCC_64" >> $GITHUB_ENV
+          echo "ENABLE_GCC_32=$ENABLE_GCC_32" >> $GITHUB_ENV
 
-        wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz -O gcc64.tar.gz
-        mkdir gcc64
-        tar -xf gcc64.tar.gz -C gcc64
+          echo "ROOT_SOLUTION=$ROOT_SOLUTION" >> $GITHUB_ENV
+          echo "SUKISU_VARIANT=$SUKISU_VARIANT" >> $GITHUB_ENV
 
-        wget -q https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz -O gcc32.tar.gz
-        mkdir gcc32
-        tar -xf gcc32.tar.gz -C gcc32
+          echo "ADD_KSU_CONFIG=$ADD_KSU_CONFIG" >> $GITHUB_ENV
+          echo "ADD_KPROBES_CONFIG=$ADD_KPROBES_CONFIG" >> $GITHUB_ENV
+          echo "ADD_OVERLAYFS_CONFIG=$ADD_OVERLAYFS_CONFIG" >> $GITHUB_ENV
+          echo "ADD_KALLSYMS_CONFIG=$ADD_KALLSYMS_CONFIG" >> $GITHUB_ENV
+          echo "ADD_KPM_CONFIG=$ADD_KPM_CONFIG" >> $GITHUB_ENV
 
-    - name: Clone Kernel Source
-      run: |
-        git clone --depth=1 -b ${KERNEL_BRANCH} ${KERNEL_SOURCE} android-kernel
+          echo "DISABLE_LTO=$DISABLE_LTO" >> $GITHUB_ENV
+          echo "DISABLE_CC_WERROR=$DISABLE_CC_WERROR" >> $GITHUB_ENV
+          echo "REMOVE_INVALID_FLAGS=$REMOVE_INVALID_FLAGS" >> $GITHUB_ENV
+          echo "FIX_VDSO_CLANG=$FIX_VDSO_CLANG" >> $GITHUB_ENV
+          echo "PYTHON_SAFELOADER_FIX=$PYTHON_SAFELOADER_FIX" >> $GITHUB_ENV
 
-    - name: Setup KernelSU
-      if: inputs.enable_kernelsu == true
-      run: |
-        cd android-kernel
-        curl -LSs "https://raw.githubusercontent.com/tiann/KernelSU/main/kernel/setup.sh" | bash -
-        
-        echo "=== Applying KernelSU 4.19 Compatibility Patches ==="
-        
-        # 1. [关键修复] 全局修复 TWA_RESUME 未定义 (修复 kernel_umount.c 和 allowlist.c)
-        # 我们使用 grep 查找所有包含 TWA_RESUME 的文件并替换为 0
-        echo "Fixing TWA_RESUME globally..."
-        grep -rl "TWA_RESUME" drivers/kernelsu | xargs sed -i 's/TWA_RESUME/0/g'
-        
-        # 2. [GKI] 移除 MODULE_IMPORT_NS (4.19 不支持)
-        sed -i '/MODULE_IMPORT_NS/d' drivers/kernelsu/ksu.c
-        
-        # 3. [Struct] 移除 seccomp.filter_count (旧内核结构体缺失)
-        sed -i '/filter_count/d' drivers/kernelsu/app_profile.c
+          echo "ENABLE_CCACHE=$ENABLE_CCACHE" >> $GITHUB_ENV
+          echo "REMOVE_UNUSED_PACKAGES=$REMOVE_UNUSED_PACKAGES" >> $GITHUB_ENV
+          echo "BUILD_BOOT_IMG=$BUILD_BOOT_IMG" >> $GITHUB_ENV
+          echo "VERBOSE_BUILD=$VERBOSE_BUILD" >> $GITHUB_ENV
+          echo "KEEP_BUILD_LOG=$KEEP_BUILD_LOG" >> $GITHUB_ENV
 
-        # 4. [Header] 修复 pgtable.h 缺失 (替换为 linux/mm.h)
-        if [ -f "drivers/kernelsu/sucompat.c" ]; then
-            sed -i 's/<linux\/pgtable.h>/<linux\/mm.h>/g' drivers/kernelsu/sucompat.c
-        fi
-        
-        # 5. [API] 修复 fsnotify API (handle_inode_event -> handle_event)
-        if [ -f "drivers/kernelsu/pkg_observer.c" ]; then
-            sed -i 's/handle_inode_event/handle_event/g' drivers/kernelsu/pkg_observer.c
-        fi
+      - name: Cleanup environment
+        shell: bash
+        run: |
+          if [ "$REMOVE_UNUSED_PACKAGES" = "true" ]; then
+            sudo rm -rf /usr/share/dotnet || true
+            sudo rm -rf /opt/ghc || true
+            sudo rm -rf "$AGENT_TOOLSDIRECTORY" || true
+          fi
 
-        # 6. [API] 修复 force_sig 参数过少 (setuid_hook.c)
-        if [ -f "drivers/kernelsu/setuid_hook.c" ]; then
-            sed -i 's/force_sig(SIGKILL)/force_sig(SIGKILL, current)/g' drivers/kernelsu/setuid_hook.c
-        fi
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison build-essential ca-certificates ccache curl flex git gnupg \
+            libelf-dev libssl-dev libtinfo5 lz4 make python2 python3 python3-pip \
+            u-boot-tools unzip wget xz-utils zip zlib1g-dev \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
-    - name: Fix Kernel Issues
-      run: |
-        cd android-kernel
-        
-        echo "=== Applying General Kernel Fixes ==="
+          sudo ln -sf /usr/bin/python2 /usr/bin/python || true
 
-        # 1. 忽略警告 (-Werror -> -Wno-error)
-        find . -name "Makefile" -exec sed -i 's/-Werror/-Wno-error/g' {} +
-        find . -name "Kconfig" -exec sed -i 's/-Werror/-Wno-error/g' {} +
+      - name: Setup toolchains
+        shell: bash
+        run: |
+          mkdir -p toolchains
+          cd toolchains
 
-        # 2. VDSO 修复 (CodeModel & Target Triple)
-        sed -i 's/-mcmodel=tiny//g' arch/arm64/kernel/vdso/Makefile
-        sed -i 's/ccflags-y := -shared/ccflags-y := -shared --target=aarch64-linux-gnu/g' arch/arm64/kernel/vdso/Makefile
-        
-        # 3. Python 兼容性
-        sed -i 's/yaml_load(f)/yaml_load(f, Loader=yaml.SafeLoader)/g' scripts/dtc/dtc-lexer.l || true
-        
-        # 4. 清理无效参数 (消除 warning)
-        find . -name "Makefile" -exec sed -i 's/-fmerge-constants//g' {} +
-        find . -name "Makefile" -exec sed -i 's/--param=allow-store-data-races=0//g' {} +
-        
-        # 5. 保险措施：再次清理 KSU 残留
-        find . -name "ksu.c" -exec sed -i '/MODULE_IMPORT_NS/d' {} +
+          wget -q "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/${CLANG_BRANCH}/clang-${CLANG_VERSION}.tar.gz"
+          mkdir -p clang
+          tar -xf "clang-${CLANG_VERSION}.tar.gz" -C clang
 
-    - name: Configure Kernel
-      run: |
-        cd android-kernel
-        export PATH=$GITHUB_WORKSPACE/toolchains/clang/bin:$PATH
-        
-        make O=out ARCH=arm64 ${KERNEL_CONFIG}
+          if [ "$ENABLE_GCC_64" = "true" ]; then
+            wget -q "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz" -O gcc64.tar.gz
+            mkdir -p gcc64
+            tar -xf gcc64.tar.gz -C gcc64
+          fi
 
-        if [ "${{ inputs.enable_kernelsu }}" == "true" ]; then
-            ./scripts/config --file out/.config --enable CONFIG_KSU
-            ./scripts/config --file out/.config --enable CONFIG_KPROBES
-            ./scripts/config --file out/.config --enable CONFIG_OVERLAY_FS
-        fi
-        
-        make O=out ARCH=arm64 olddefconfig
+          if [ "$ENABLE_GCC_32" = "true" ]; then
+            wget -q "https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-linux-androideabi-4.9/+archive/refs/tags/android-12.1.0_r27.tar.gz" -O gcc32.tar.gz
+            mkdir -p gcc32
+            tar -xf gcc32.tar.gz -C gcc32
+          fi
 
-    - name: Build Kernel
-      run: |
-        cd android-kernel
-        export PATH=$GITHUB_WORKSPACE/toolchains/clang/bin:$PATH
-        
-        make -j$(nproc --all) O=out \
-          ARCH=arm64 \
-          CC=clang \
-          CLANG_TRIPLE=aarch64-linux-gnu- \
-          CROSS_COMPILE=$GITHUB_WORKSPACE/toolchains/gcc64/bin/aarch64-linux-android- \
-          CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/toolchains/gcc32/bin/arm-linux-androideabi- \
-          LD=ld.lld \
-          AR=llvm-ar \
-          NM=llvm-nm \
-          OBJCOPY=llvm-objcopy \
-          OBJDUMP=llvm-objdump \
-          STRIP=llvm-strip \
-          Image.gz
+      - name: Clone kernel source
+        shell: bash
+        run: |
+          git clone --depth=1 -b "${KERNEL_SOURCE_BRANCH}" "${KERNEL_SOURCE}" android-kernel
 
-    - name: Package Kernel
-      run: |
-        cd android-kernel
-        if [ -f out/arch/arm64/boot/Image.gz ]; then
-            echo "Build Success!"
-            mkdir -p upload
-            cp out/arch/arm64/boot/Image.gz upload/Image.gz
-            find out/arch/arm64/boot/dts -name "*.dtb" -exec cp {} upload/ \; || true
-            cd upload
-            zip -r ../kernel-A04-SukiSU-Ultra.zip .
-        else
-            echo "Error: Image.gz not found!"
+      - name: Integrate SukiSU-Ultra
+        shell: bash
+        run: |
+          cd android-kernel
+
+          if [ "${ROOT_SOLUTION}" != "sukisu-ultra" ]; then
+            echo "Unsupported ROOT_SOLUTION=${ROOT_SOLUTION}"
             exit 1
-        fi
+          fi
 
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: SukiSU-Ultra-A04-Kernel
-        path: android-kernel/kernel-*.zip
+          # non-GKI / built-in 走 builtin
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s "${SUKISU_VARIANT}"
+
+      - name: Apply general kernel fixes
+        shell: bash
+        run: |
+          cd android-kernel
+
+          if [ "$DISABLE_CC_WERROR" = "true" ]; then
+            find . -name "Makefile" -exec sed -i 's/-Werror/-Wno-error/g' {} + || true
+            find . -name "Kconfig" -exec sed -i 's/-Werror/-Wno-error/g' {} + || true
+          fi
+
+          if [ "$FIX_VDSO_CLANG" = "true" ] && [ -f arch/arm64/kernel/vdso/Makefile ]; then
+            sed -i 's/-mcmodel=tiny//g' arch/arm64/kernel/vdso/Makefile || true
+            sed -i 's/ccflags-y := -shared/ccflags-y := -shared --target=aarch64-linux-gnu/g' arch/arm64/kernel/vdso/Makefile || true
+          fi
+
+          if [ "$PYTHON_SAFELOADER_FIX" = "true" ]; then
+            sed -i 's/yaml_load(f)/yaml_load(f, Loader=yaml.SafeLoader)/g' scripts/dtc/dtc-lexer.l || true
+          fi
+
+          if [ "$REMOVE_INVALID_FLAGS" = "true" ]; then
+            find . -name "Makefile" -exec sed -i 's/-fmerge-constants//g' {} + || true
+            find . -name "Makefile" -exec sed -i 's/--param=allow-store-data-races=0//g' {} + || true
+          fi
+
+      - name: Configure kernel
+        shell: bash
+        run: |
+          cd android-kernel
+          export PATH="$GITHUB_WORKSPACE/toolchains/clang/bin:$PATH"
+
+          make O=out ARCH=${ARCH} ${KERNEL_CONFIG}
+
+          if [ "$ADD_KSU_CONFIG" = "true" ]; then
+            ./scripts/config --file out/.config --enable CONFIG_KSU || true
+          fi
+
+          if [ "$ADD_KPROBES_CONFIG" = "true" ]; then
+            ./scripts/config --file out/.config --enable CONFIG_KPROBES || true
+            ./scripts/config --file out/.config --enable CONFIG_KRETPROBES || true
+          fi
+
+          if [ "$ADD_OVERLAYFS_CONFIG" = "true" ]; then
+            ./scripts/config --file out/.config --enable CONFIG_OVERLAY_FS || true
+          fi
+
+          if [ "$ADD_KALLSYMS_CONFIG" = "true" ]; then
+            ./scripts/config --file out/.config --enable CONFIG_KALLSYMS || true
+            ./scripts/config --file out/.config --enable CONFIG_KALLSYMS_ALL || true
+          fi
+
+          if [ "$ADD_KPM_CONFIG" = "true" ]; then
+            ./scripts/config --file out/.config --enable CONFIG_KPM || true
+          fi
+
+          if [ "$DISABLE_LTO" = "true" ]; then
+            ./scripts/config --file out/.config --disable LTO || true
+            ./scripts/config --file out/.config --disable LTO_CLANG || true
+            ./scripts/config --file out/.config --disable THINLTO || true
+            ./scripts/config --file out/.config --disable FULL_LTO || true
+          fi
+
+          make O=out ARCH=${ARCH} olddefconfig
+
+          echo "===== Final Config Check ====="
+          grep -E "CONFIG_KSU|CONFIG_KPROBES|CONFIG_OVERLAY_FS|CONFIG_KALLSYMS|CONFIG_KALLSYMS_ALL|CONFIG_KPM" out/.config || true
+
+      - name: Build kernel
+        shell: bash
+        run: |
+          cd android-kernel
+          export PATH="$GITHUB_WORKSPACE/toolchains/clang/bin:$PATH"
+
+          MAKE_ARGS=(
+            -j"$(nproc --all)"
+            O=out
+            ARCH=${ARCH}
+            CC=clang
+            CLANG_TRIPLE=aarch64-linux-gnu-
+            LD=ld.lld
+            AR=llvm-ar
+            NM=llvm-nm
+            OBJCOPY=llvm-objcopy
+            OBJDUMP=llvm-objdump
+            STRIP=llvm-strip
+          )
+
+          if [ "$ENABLE_GCC_64" = "true" ]; then
+            MAKE_ARGS+=(CROSS_COMPILE=$GITHUB_WORKSPACE/toolchains/gcc64/bin/aarch64-linux-android-)
+          fi
+
+          if [ "$ENABLE_GCC_32" = "true" ]; then
+            MAKE_ARGS+=(CROSS_COMPILE_ARM32=$GITHUB_WORKSPACE/toolchains/gcc32/bin/arm-linux-androideabi-)
+          fi
+
+          if [ "$VERBOSE_BUILD" = "true" ]; then
+            MAKE_ARGS+=(V=1)
+          fi
+
+          make "${MAKE_ARGS[@]}" ${KERNEL_IMAGE_NAME} 2>&1 | tee build.log
+
+      - name: Save build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: android-kernel/build.log
+
+      - name: Package kernel artifact
+        shell: bash
+        run: |
+          cd android-kernel
+
+          if [ ! -f "out/arch/arm64/boot/${KERNEL_IMAGE_NAME}" ]; then
+            echo "Build failed: ${KERNEL_IMAGE_NAME} not found"
+            exit 1
+          fi
+
+          mkdir -p upload
+          cp "out/arch/arm64/boot/${KERNEL_IMAGE_NAME}" "upload/${KERNEL_IMAGE_NAME}"
+
+          find out/arch/arm64/boot/dts -name "*.dtb" -exec cp {} upload/ \; || true
+          find out/arch/arm64/boot/dts -name "*.dtbo" -exec cp {} upload/ \; || true
+
+          cd upload
+          zip -r ../kernel-A04-SukiSU-Ultra.zip .
+
+      - name: Upload kernel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SukiSU-Ultra-A04-Kernel
+          path: android-kernel/kernel-A04-SukiSU-Ultra.zip
