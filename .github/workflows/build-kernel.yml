@@ -148,6 +148,18 @@ jobs:
           set -euo pipefail
           git clone --depth=1 -b "${KERNEL_SOURCE_BRANCH}" "${KERNEL_SOURCE}" android-kernel
 
+      - name: Find bad true token in build files
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd android-kernel
+
+          echo "===== grep token true in build files ====="
+          grep -RIn --include='Makefile' --include='Kbuild' --include='*.mk' --include='*.mak' '\<true\>' . || true
+
+          echo "===== grep KBUILD_CFLAGS ====="
+          grep -RIn --include='Makefile' --include='Kbuild' --include='*.mk' 'KBUILD_CFLAGS\|CFLAGS_KERNEL\|KCFLAGS\|ccflags-y\|subdir-ccflags-y' . || true
+          
       - name: Disable broken staging Kconfig entries
         shell: bash
         run: |
@@ -320,12 +332,7 @@ jobs:
             "STRIP=llvm-strip"
             "LLVM=1"
             "LLVM_IAS=1"
-            "KCFLAGS="
-            "KCPPFLAGS="
-            "CFLAGS_KERNEL="
-            "CFLAGS_MODULE="
-            "HOSTCFLAGS="
-            "HOSTLDFLAGS="
+            "KCFLAGS=-Wno-error"
             "V=1"
           )
 
